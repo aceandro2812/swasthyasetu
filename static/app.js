@@ -2,6 +2,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const form = document.getElementById('diagnosis-form');
   const symptomsInput = document.getElementById('symptoms');
   const locationInput = document.getElementById('location');
+  const learnModeInput = document.getElementById('learn-mode');
   const loading = document.getElementById('loading');
   const reportSection = document.getElementById('report-section');
   const reportContent = document.getElementById('report-content');
@@ -60,6 +61,7 @@ document.addEventListener('DOMContentLoaded', function() {
     e.preventDefault();
     const symptoms = symptomsInput.value.trim();
     const location = locationInput.value.trim();
+    const learn_mode = learnModeInput && learnModeInput.checked;
     let valid = true;
     if (!symptoms) {
       symptomsInput.focus();
@@ -87,7 +89,7 @@ document.addEventListener('DOMContentLoaded', function() {
       const response = await fetch('/diagnose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symptoms, location })
+        body: JSON.stringify({ symptoms, location, learn_mode })
       });
       setProgress(4);
       const data = await response.json();
@@ -186,6 +188,20 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     html += `<div class='mb-2'><span class='font-semibold'>Visual Aid:</span> <span class='italic text-gray-600'>${report.education.visual}</span></div>`;
     html += `<div class='mt-4 text-xs text-gray-400'>Status: ${report.workflow_status}</div>`;
+    // Learn Mode: Show reasoning/guidelines if present
+    if (report.reasoning || report.guidelines) {
+      html += `<hr class='my-4'>`;
+      if (report.reasoning) {
+        html += `<div class='mb-2'><span class='font-semibold text-blue-700'>Step-by-step Reasoning:</span><ul class='list-decimal ml-6 text-gray-800'>`;
+        report.reasoning.forEach(r => { html += `<li>${r}</li>`; });
+        html += `</ul></div>`;
+      }
+      if (report.guidelines) {
+        html += `<div class='mb-2'><span class='font-semibold text-green-700'>Guideline References:</span><ul class='list-disc ml-6 text-gray-700'>`;
+        report.guidelines.forEach(g => { html += `<li>${g}</li>`; });
+        html += `</ul></div>`;
+      }
+    }
     reportContent.innerHTML = html;
     reportError.classList.add('hidden');
     // Advanced section (hidden by default)

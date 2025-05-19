@@ -115,6 +115,7 @@ class AgentState(TypedDict):
     input_language: Optional[str]
     symptoms_text: str
     location: Optional[str]
+    learn_mode: Optional[bool]
     rag_context: Optional[List[str]]
     initial_diagnosis: Optional[Dict[str, Any]]
     triage_result: Optional[Dict[str, Any]]
@@ -138,6 +139,7 @@ else:
 def diagnostician_node(state: AgentState) -> AgentState:
     logger.info("[Node] Diagnostician: Entry")
     symptoms = state.get("symptoms_text")
+    learn_mode = state.get("learn_mode", False)
     if not symptoms:
         logger.error("Diagnostician failed: Symptoms missing.")
         return {**state, "error_message": "Diagnostician failed: Symptoms missing."}
@@ -186,13 +188,19 @@ def diagnostician_node(state: AgentState) -> AgentState:
     except Exception as e:
         logger.error(f"Diagnostician failed: {e}")
         return {**state, "error_message": f"Diagnostician failed: {e}"}
+    reasoning = []
+    guidelines = []
+    if learn_mode:
+        reasoning.append("Analyzed symptoms and context for likely diagnoses using pattern recognition and RAG context.")
+        guidelines.append("Based on general diagnostic reasoning and PubMed abstracts. For real-world use, cross-check with NICE/WHO guidelines.")
     logger.info("[Node] Diagnostician: Exit")
-    return {**state, "initial_diagnosis": diagnosis_json, "error_message": None}
+    return {**state, "initial_diagnosis": diagnosis_json, "diagnosis_reasoning": reasoning, "diagnosis_guidelines": guidelines, "error_message": None}
 
 def triage_agent_node(state: AgentState) -> AgentState:
     logger.info("[Node] Triage Agent: Entry")
     diagnosis = state.get("initial_diagnosis", {})
     symptoms = state.get("symptoms_text", "")
+    learn_mode = state.get("learn_mode", False)
     if not diagnosis or not symptoms:
         logger.warning("Triage Agent skipped: Missing diagnosis or symptoms.")
         return {**state, "triage_result": {"status": "Skipped", "reason": "Missing diagnosis or symptoms."}}
@@ -234,6 +242,14 @@ Provide ONLY the JSON object in your response.
                 raise ValueError("Triage JSON missing required keys.")
             logger.info("Triage Agent: Triage JSON parsed successfully.")
             triage_json["status"] = "Success"
+            if learn_mode:
+                triage_json["reasoning"] = [
+                    "Classified urgency based on diagnosis and symptom severity.",
+                    "Emergency if life-threatening, urgent if needs quick attention, routine otherwise."
+                ]
+                triage_json["guidelines"] = [
+                    "Triage logic inspired by WHO triage protocols and common clinical practice."
+                ]
         else:
             logger.error("Triage Agent failed: Invalid JSON response from LLM.")
             triage_json = {"status": "Failed", "reason": "Invalid JSON response from LLM."}
@@ -292,6 +308,7 @@ def validator_node(state: AgentState) -> AgentState:
     initial_diagnosis = state.get("initial_diagnosis")
     symptoms = state.get("symptoms_text")
     rag_context = state.get("rag_context", [])
+    learn_mode = state.get("learn_mode", False)
     if not initial_diagnosis or not symptoms:
         logger.warning("Validator skipped: Missing diagnosis or symptoms.")
         return {**state, "validation_results": {"status": "Skipped", "reason": "Missing diagnosis or symptoms."}}
@@ -318,6 +335,13 @@ def validator_node(state: AgentState) -> AgentState:
             if not isinstance(validation_json["missed_alternatives"], list):
                 raise ValueError("'missed_alternatives' must be a list.")
             logger.info("Validator: Validation JSON parsed successfully.")
+            if learn_mode:
+                validation_json["reasoning"] = [
+                    "Compared AI diagnosis to established guidelines and checked for contradictions.",
+                    "Flagged for review if inconsistencies or missed alternatives found."
+                ]
+                validation_json["guidelines"] = [
+                    "Validation logic based on NICE/WHO clinical guidelines."]
         else:
             validation_json = {"status": "Failed", "reason": "Invalid JSON response from LLM critique.", "critique": "", "missed_alternatives": []}
     except Exception as e:
@@ -329,6 +353,7 @@ def educator_node(state: AgentState) -> AgentState:
     logger.info("[Node] Educator: Entry")
     diagnosis_info = state.get("initial_diagnosis")
     rag_context = state.get("rag_context", [])
+    learn_mode = state.get("learn_mode", False)
     if not diagnosis_info or not diagnosis_info.get("primary_diagnosis"):
         logger.warning("Educator skipped: Missing diagnosis.")
         return {**state, "patient_education": {"status": "Skipped", "reason": "Missing diagnosis."}}
@@ -353,6 +378,13 @@ def educator_node(state: AgentState) -> AgentState:
             if not isinstance(education_json["next_steps"], list):
                 raise ValueError("'next_steps' must be a list.")
             logger.info("Educator: Education JSON parsed successfully.")
+            if learn_mode and education_json:
+                education_json["reasoning"] = [
+                    "Generated patient-friendly explanation and next steps based on diagnosis and context.",
+                    "Avoided medical jargon and emphasized consulting a professional."
+                ]
+                education_json["guidelines"] = [
+                    "Patient education based on WHO patient communication best practices."]
         else:
             education_json = {"status": "Failed", "reason": "Invalid JSON response from educator LLM."}
     except Exception as e:
@@ -406,6 +438,7 @@ def format_output_node(state: AgentState) -> AgentState:
     validation = state.get("validation_results", {})
     education = state.get("patient_education", {})
     bias_info = state.get("bias_analysis", {})
+    learn_mode = state.get("learn_mode", False)
     primary_diagnosis = initial_diag.get("primary_diagnosis", "N/A")
     confidence = initial_diag.get("primary_confidence", 0.0)
     alternatives = initial_diag.get("alternative_diagnoses", [])
@@ -453,6 +486,17 @@ def format_output_node(state: AgentState) -> AgentState:
             "validator_critique": validation.get("critique", "N/A")
         }
     }
+    if learn_mode:
+        final_report["reasoning"] = []
+        final_report["guidelines"] = []
+        if state.get("diagnosis_reasoning"): final_report["reasoning"] += state["diagnosis_reasoning"]
+        if triage.get("reasoning"): final_report["reasoning"] += triage["reasoning"]
+        if validation.get("reasoning"): final_report["reasoning"] += validation["reasoning"]
+        if education.get("reasoning"): final_report["reasoning"] += education["reasoning"]
+        if state.get("diagnosis_guidelines"): final_report["guidelines"] += state["diagnosis_guidelines"]
+        if triage.get("guidelines"): final_report["guidelines"] += triage["guidelines"]
+        if validation.get("guidelines"): final_report["guidelines"] += validation["guidelines"]
+        if education.get("guidelines"): final_report["guidelines"] += education["guidelines"]
     error = state.get("error_message")
     if error:
         final_report["workflow_status"] = "Error"
@@ -503,6 +547,7 @@ templates = Jinja2Templates(directory="templates")
 class SymptomInput(BaseModel):
     symptoms: str
     location: str
+    learn_mode: Optional[bool] = False
 
 @app.post("/diagnose")
 async def diagnose(symptom_input: SymptomInput):
@@ -515,6 +560,7 @@ async def diagnose(symptom_input: SymptomInput):
         input_language="en",
         symptoms_text=symptom_input.symptoms,
         location=symptom_input.location,
+        learn_mode=symptom_input.learn_mode,
         rag_context=None,
         initial_diagnosis=None,
         triage_result=None,
