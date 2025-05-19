@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwasthyaSetu - Accessible Health Assistant</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-green-50 min-h-screen flex flex-col">
+  <header class="bg-gradient-to-r from-blue-800 to-green-700 text-white p-8 shadow-lg">
+    <div class="flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <span class="text-4xl">🌉</span>
+        <span class="text-3xl font-extrabold tracking-tight">SwasthyaSetu</span>
+        <span class="text-base font-normal bg-blue-900 px-2 py-1 rounded ml-2">v1.0</span>
+      </div>
+      <div class="text-lg font-medium opacity-90">Your Bridge to Accessible Healthcare</div>
+    </div>
+  </header>
+  <main class="flex-1 flex flex-col items-center justify-center p-4 w-full">
+    <form id="diagnosis-form" class="w-full max-w-2xl bg-white/90 rounded-2xl shadow-xl p-10 space-y-8 mt-8" aria-label="Diagnosis form">
+      <div class="flex items-center justify-between">
+        <label for="symptoms" class="block text-xl font-semibold mb-2">Describe Your Symptoms
+          <span tabindex="0" class="ml-2 text-blue-600 cursor-pointer" aria-label="Help" title="Describe your symptoms in your own words. You can also click an example below.">
+            <svg xmlns="http://www.w3.org/2000/svg" class="inline h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 14v.01M12 10v.01M16 10h.01M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z" /></svg>
+          </span>
+        </label>
+        <button type="button" id="clear-btn" class="text-sm text-gray-500 hover:text-blue-700 underline">Clear</button>
+      </div>
+      <textarea id="symptoms" name="symptoms" rows="5" class="w-full p-4 border-2 border-blue-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-lg bg-blue-50/50" placeholder="e.g., High fever, chills, headache, and fatigue..." aria-required="true" aria-label="Patient symptoms"></textarea>
+      <div class="mb-4">
+        <label for="location" class="block text-xl font-semibold mb-2">Your Location
+          <span tabindex="0" class="ml-2 text-blue-600 cursor-pointer" aria-label="Help" title="Enter your city, district, or pin code for local doctor recommendations.">
+            <svg xmlns="http://www.w3.org/2000/svg" class="inline h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c1.104 0 2-.896 2-2s-.896-2-2-2-2 .896-2 2 .896 2 2 2zm0 0c-4 0-7 2-7 4v2h14v-2c0-2-3-4-7-4z" /></svg>
+          </span>
+        </label>
+        <input id="location" name="location" type="text" class="w-full p-4 border-2 border-blue-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-lg bg-blue-50/50" placeholder="e.g., Patna, Bihar or 800001" aria-required="true" aria-label="Patient location">
+        <div class="text-xs text-gray-400 mt-1">We use your location to suggest nearby doctors and clinics.</div>
+      </div>
+      <div class="flex flex-wrap gap-2 mb-2" aria-label="Example symptoms">
+        <span class="example-chip bg-blue-100 text-blue-800 px-3 py-1 rounded-full cursor-pointer text-sm hover:bg-blue-200 transition" tabindex="0">Fever, cough, shortness of breath</span>
+        <span class="example-chip bg-blue-100 text-blue-800 px-3 py-1 rounded-full cursor-pointer text-sm hover:bg-blue-200 transition" tabindex="0">Chest pain, sweating, nausea</span>
+        <span class="example-chip bg-blue-100 text-blue-800 px-3 py-1 rounded-full cursor-pointer text-sm hover:bg-blue-200 transition" tabindex="0">Rash, joint pain, recent travel</span>
+        <span class="example-chip bg-blue-100 text-blue-800 px-3 py-1 rounded-full cursor-pointer text-sm hover:bg-blue-200 transition" tabindex="0">Headache, neck stiffness, photophobia</span>
+      </div>
+      <div class="flex flex-col sm:flex-row gap-4">
+        <button type="submit" class="bg-gradient-to-r from-blue-700 to-green-600 hover:from-blue-800 hover:to-green-700 text-white font-bold py-3 px-8 rounded-xl transition text-lg focus:outline-none focus:ring-2 focus:ring-blue-400 shadow-lg" aria-label="Get Diagnosis">Get Diagnosis</button>
+        <button type="button" id="example-btn" class="bg-gray-100 hover:bg-blue-100 text-blue-800 font-semibold py-3 px-6 rounded-xl text-lg border border-blue-200" aria-label="Fill with example">Try Example</button>
+      </div>
+      <div class="text-xs text-gray-400 mt-2">All data is processed securely and not stored.</div>
+    </form>
+    <div id="progress-indicator" class="w-full max-w-2xl mt-8 hidden" aria-live="polite">
+      <div class="flex items-center gap-2">
+        <div class="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+          <div id="progress-bar" class="h-2 bg-gradient-to-r from-blue-600 to-green-500 transition-all" style="width:0%"></div>
+        </div>
+        <span id="progress-step" class="ml-2 text-sm text-blue-700 font-semibold">Starting...</span>
+      </div>
+    </div>
+    <div id="loading" class="hidden mt-8 flex flex-col items-center" aria-live="polite">
+      <svg class="animate-spin h-10 w-10 text-blue-700 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>
+      <span class="text-blue-700 font-semibold text-lg">Processing your request...</span>
+    </div>
+    <section id="report-section" class="w-full max-w-2xl mt-8 hidden" aria-live="polite">
+      <div class="bg-white/95 rounded-2xl shadow-xl p-8">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-2xl font-bold text-blue-800 flex items-center gap-2">Diagnosis Report <span class="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">SwasthyaSetu</span></h2>
+          <div class="flex gap-2">
+            <button id="download-btn" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm" aria-label="Download report">Download</button>
+            <button id="print-btn" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-3 py-1 rounded text-sm" aria-label="Print report">Print</button>
+          </div>
+        </div>
+        <div id="report-content"></div>
+        <div id="report-error" class="text-red-600 mt-4 hidden"></div>
+        <div class="mt-6">
+          <button id="toggle-advanced-btn" class="text-blue-700 underline text-sm">Show Advanced Details</button>
+        </div>
+        <div id="advanced-section" class="hidden mt-6 border-t pt-4">
+          <h3 class="text-lg font-semibold mb-2 text-blue-700">Advanced Details (Bias, Debug, etc.)</h3>
+          <div id="advanced-content"></div>
+        </div>
+      </div>
+    </section>
+    <section class="w-full max-w-2xl mt-8" aria-label="How to use">
+      <div class="bg-gradient-to-r from-yellow-50 to-green-50 border-l-4 border-yellow-400 p-4 rounded text-yellow-900 text-base">
+        <strong>How to use:</strong> Enter symptoms in your own words, or click an example. Click <b>Get Diagnosis</b> and follow the progress. Download or print the report for your records. <span class="font-semibold">This tool does not replace a doctor.</span>
+      </div>
+    </section>
+  </main>
+  <footer class="bg-gradient-to-r from-blue-100 to-green-100 text-center py-4 text-gray-700 text-base mt-8 shadow-inner">
+    &copy; 2025 SwasthyaSetu. For demonstration only. Not a substitute for professional medical advice.
+  </footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

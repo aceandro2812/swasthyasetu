@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+jinja2
+python-dotenv
+# For AI workflow dependencies (to be filled in as you migrate logic):
+langgraph
+llama-index
+faiss-cpu
+google-generativeai
+llama-index-vector-stores-faiss
+llama-index-embeddings-gemini
+llama-index-readers-file
+sentence-transformers
+torch
