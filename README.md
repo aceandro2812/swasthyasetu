@@ -1,105 +1,360 @@
-# SwasthyaSetu
+<div align="center">
 
-**SwasthyaSetu** ("Bridge to Health") is an open-source, AI-powered medical triage and routing assistant designed for accessibility and social impact. It helps users describe their symptoms, receive a preliminary diagnosis, get triaged for urgency, and find local healthcare providers—all with a modern, user-friendly interface.
+<!-- Animated Header Banner -->
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20&height=200&section=header&text=Kimi%20Global%20Agent%20Team&fontSize=50&fontColor=ffffff&animation=fadeIn&fontAlignY=35&desc=Multi-Agent%20Orchestration%20System&descAlignY=55&descSize=18" />
 
-## Features
+<!-- Badges -->
+<p align="center">
+  <img src="https://img.shields.io/badge/Kimi-Code%20CLI-FF6B6B?style=for-the-badge&logo=ai&logoColor=white" alt="Kimi" />
+  <img src="https://img.shields.io/badge/Multi--Agent-Orchestration-4ECDC4?style=for-the-badge&logo=workflow&logoColor=white" alt="Multi-Agent" />
+  <img src="https://img.shields.io/badge/Production-Ready-45B7D1?style=for-the-badge&logo=checkmarx&logoColor=white" alt="Production" />
+  <img src="https://img.shields.io/badge/License-MIT-96CEB4?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="License" />
+</p>
 
-- **Multi-agent AI workflow** (LangGraph, Gemini LLM):
-  - Differential diagnosis
-  - Triage (emergency/urgent/routine)
-  - Patient education
-  - Bias and equity check (optional, for advanced users)
-  - Local doctor/specialist routing (DuckDuckGo search)
-- **Modern, accessible UI** (Tailwind CSS, HTML, JS)
-- **Location-aware recommendations**
-- **Download/print reports**
-- **Advanced details** (bias/debug info) hidden by default
-- **Granular backend logging for observability**
+<!-- Animated Tagline -->
+<p align="center">
+  <img src="https://readme-typing-svg.herokuapp.com?font=Fira+Code&size=22&duration=3000&pause=1000&color=FF6B6B&center=true&vCenter=true&width=600&lines=Research-Backed+Multi-Agent+System;Structured+AI+Engineering+Organization;Modern+Prompt+Engineering+Techniques;Production-Grade+Orchestration" alt="Typing SVG" />
+</p>
 
-## Quickstart
+<!-- Quick Links -->
+<p align="center">
+  <a href="#-quick-start">🚀 Quick Start</a> •
+  <a href="#-architecture">🏗️ Architecture</a> •
+  <a href="#-features">✨ Features</a> •
+  <a href="#-research">📚 Research</a>
+</p>
 
-1. **Clone the repo:**
-   ```sh
-   git clone https://github.com/your-org/swasthyasetu.git
-   cd swasthyasetu
-   ```
-2. **Install dependencies:**
-   ```sh
-   pip install -r requirements.txt
-   ```
-3. **Set up environment:**
-   - Copy `.env.example` to `.env` and add your Google Gemini API key.
-4. **Run the app:**
-   ```sh
-   uvicorn main:app --reload
-   ```
-5. **Open in browser:**
-   - Go to [http://localhost:8000](http://localhost:8000)
-
-## Project Structure
-
-- `main.py` — FastAPI backend, agent workflow, logging
-- `templates/index.html` — Main UI (Tailwind CSS)
-- `static/app.js` — Frontend logic
-- `requirements.txt` — Python dependencies
-- `medsarathi.ipynb` — Original notebook (for reference)
-
+</div>
 
 ---
 
-# Technical Documentation & Developer Guide
+## 📋 Overview
 
-## Agent Workflow (LangGraph)
+```mermaid
+graph TD
+    A[🎯 Global Root] --> B[📐 Planner]
+    A --> C[💻 Coder]
+    A --> D[🧪 Tester]
+    A --> E[🔍 Reviewer]
+    A --> F[⚡ Refactorer]
+    
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+    F --> A
+    
+    style A fill:#FF6B6B,stroke:#333,stroke-width:2px,color:#fff
+    style B fill:#4ECDC4,stroke:#333,stroke-width:2px,color:#fff
+    style C fill:#45B7D1,stroke:#333,stroke-width:2px,color:#fff
+    style D fill:#96CEB4,stroke:#333,stroke-width:2px,color:#fff
+    style E fill:#FFEAA7,stroke:#333,stroke-width:2px,color:#333
+    style F fill:#DDA0DD,stroke:#333,stroke-width:2px,color:#fff
+```
 
-The backend orchestrates a multi-agent workflow using LangGraph:
+**Kimi Global Agent Team** transforms Kimi Code CLI into a structured AI engineering organization. Inspired by cutting-edge multi-agent research and modern prompt engineering techniques, this system delivers production-grade code through collaborative agent orchestration.
 
-1. **Diagnostician** — Generates a differential diagnosis from symptoms and RAG context.
-2. **Triage Agent** — Classifies urgency (emergency/urgent/routine) and suggests next steps.
-3. **Routing Agent** — Uses diagnosis, triage, and user location to find local specialists (DuckDuckGo search).
-4. **Validator** — Checks diagnosis against medical guidelines.
-5. **Educator** — Generates patient-friendly explanations and next steps.
-6. **Bias Checker** — Analyzes for bias and equity (optional output).
-7. **Output Formatter** — Assembles the final report.
+---
 
-All agent nodes are fully logged for observability.
+## 🚀 Quick Start
 
-## Extending the System
+### Prerequisites
 
-- **Add new agents:**
-  - Define a new node function in `main.py`.
-  - Add it to the LangGraph workflow and connect edges.
-- **Swap LLMs:**
-  - Replace Gemini with any LLM (OpenAI, local, etc.) by updating the LLM call logic.
-- **Improve RAG:**
-  - Add more/better medical documents to the vector store.
-- **Integrate with real provider APIs:**
-  - Replace DuckDuckGo search with real hospital/doctor APIs for direct routing.
-- **Add speech input:**
-  - Integrate browser speech-to-text in the frontend.
-- **Mobile/PWA support:**
-  - Enhance UI for offline/low-bandwidth use.
-- **Localization:**
-  - Add multi-language support for rural/global deployment.
+- Kimi Code CLI installed
+- Bash-compatible terminal
+- Git
 
-## Advanced/Agentic LLM Development
+### Installation
 
-- **Agent state is a TypedDict** — Add new fields as needed for new agent nodes.
-- **Each agent node is a pure function** — Receives and returns the state dict.
-- **LangGraph** — Flexible for branching, streaming, or more complex agentic flows.
-- **Observability** — All major steps are logged; add more as needed for debugging or analytics.
+<details open>
+<summary><b>⚡ One-Line Install</b></summary>
 
-## Further Scope
+```bash
+curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/kimi-global-agent-team/main/install.sh | bash
+```
 
-- **Doctor collaboration:**
-  - Allow doctors to register and receive direct case routing.
-- **Case history:**
-  - Store and retrieve past reports for users (with privacy controls).
-- **WhatsApp/SMS integration:**
-  - For rural/low-tech accessibility.
-- **Regulatory compliance:**
-  - Add disclaimers, privacy, and consent flows as needed for deployment.
+</details>
 
-## Contact & Community
+<details>
+<summary><b>📦 Manual Installation</b></summary>
 
-- Issues and PRs welcome!
-- For questions, open an issue or contact the maintainers.
+```bash
+# 1. Clone the repository
+git clone https://github.com/YOUR_USERNAME/kimi-global-agent-team.git
+cd kimi-global-agent-team
+
+# 2. Make installer executable
+chmod +x install.sh
+
+# 3. Run installer
+./install.sh
+
+# 4. Reload shell configuration
+source ~/.bashrc  # or ~/.zshrc
+
+# 5. Launch the agent system
+kimi-team
+```
+
+</details>
+
+---
+
+## 🏗️ Architecture
+
+<div align="center">
+
+| Agent | Role | Responsibilities |
+|:-----:|:----:|:-----------------|
+| 🎯 **Global Root** | Orchestrator / Manager | Task delegation, workflow coordination, final output assembly |
+| 📐 **Planner** | System Architect | High-level design, technical specifications, architecture planning |
+| 💻 **Coder** | Implementation Engineer | Code generation, feature implementation, bug fixes |
+| 🧪 **Tester** | QA & Test Generator | Unit tests, integration tests, test coverage analysis |
+| 🔍 **Reviewer** | Code Reviewer & Security | Security audits, code quality checks, best practices enforcement |
+| ⚡ **Refactorer** | Optimization & Cleanup | Performance optimization, code cleanup, technical debt reduction |
+
+</div>
+
+### Delegation Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         WORKFLOW PIPELINE                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐  │
+│   │  INPUT   │───▶│ PLANNER  │───▶│  CODER   │───▶│  TESTER  │  │
+│   └──────────┘    └──────────┘    └──────────┘    └────┬─────┘  │
+│                                                        │        │
+│   ┌──────────┐    ┌──────────┐    ┌──────────┐         │        │
+│   │  OUTPUT  │◀───│ REFACTOR │◀───│ REVIEWER │◀────────┘        │
+│   └──────────┘    └──────────┘    └──────────┘                  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Core Tools
+
+| Tool | Purpose |
+|------|---------|
+| `Task` | Synchronous task execution and result tracking |
+| `CreateSubagent` | Dynamic agent spawning for specialized tasks |
+| `Read/Edit` | File system operations with context awareness |
+| `Shell` | Command execution and environment management |
+
+---
+
+## ✨ Features
+
+<div align="center">
+
+<table>
+<tr>
+<td width="50%">
+
+### 🧠 Intelligent Planning
+- **Chain-of-Thought** reasoning
+- **Tree-of-Thoughts** exploration
+- Multi-step task decomposition
+- Context-aware decision making
+
+</td>
+<td width="50%">
+
+### 🔒 Security First
+- Automated security audits
+- Injection testing
+- Secrets detection
+- Compliance checking
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### ⚙️ Dynamic Orchestration
+- Runtime agent creation
+- Adaptive task routing
+- Self-verification loops
+- Error recovery mechanisms
+
+</td>
+<td width="50%">
+
+### 📊 Structured Output
+- JSON schema validation
+- Deterministic generation
+- Type-safe responses
+- Consistent formatting
+
+</td>
+</tr>
+</table>
+
+</div>
+
+---
+
+## 💡 Example Usage
+
+### Building a Production REST API
+
+```bash
+$ kimi-team
+
+🎯 Global Root: "Build a production-ready Express REST API with JWT authentication"
+```
+
+**Expected Workflow:**
+
+```
+✅ Phase 1: Planning
+   └─ 📐 Planner analyzes requirements
+   └─ 📐 Planner designs architecture
+   └─ 📐 Planner creates technical specification
+
+✅ Phase 2: Implementation  
+   └─ 💻 Coder generates Express boilerplate
+   └─ 💻 Coder implements JWT middleware
+   └─ 💻 Coder creates route handlers
+
+✅ Phase 3: Testing
+   └─ 🧪 Tester writes unit tests
+   └─ 🧪 Tester creates integration tests
+   └─ 🧪 Tester validates coverage
+
+✅ Phase 4: Review
+   └─ 🔍 Reviewer checks security
+   └─ 🔍 Reviewer validates best practices
+   └─ 🔍 Reviewer approves changes
+
+✅ Phase 5: Optimization
+   └─ ⚡ Refactorer optimizes performance
+   └─ ⚡ Refactorer cleans up code
+
+🎉 Final Output: Production-ready API delivered!
+```
+
+---
+
+## 📚 Research Foundations
+
+<div align="center">
+
+| Research Paper | Authors | Year | Link |
+|:--------------|:--------|:----:|:----:|
+| **Chain-of-Thought Prompting** | Wei et al. | 2022 | [arXiv](https://arxiv.org/abs/2201.11903) |
+| **Tree-of-Thoughts** | Yao et al. | 2023 | [NeurIPS](https://arxiv.org/abs/2305.10601) |
+| **Structured Prompting & Self-Verification** | Prompt Engineering Survey | 2024 | [arXiv](https://arxiv.org/abs/2407.05437) |
+| **Multi-Agent Engineering Pattern** | Oh-My-OpenCode | — | [GitHub](https://github.com/code-yeongyu/oh-my-opencode) |
+
+</div>
+
+---
+
+## ⚙️ Configuration
+
+### Best Practices
+
+```yaml
+# Recommended Settings
+model: kimi-for-coding
+thinking_mode: enabled
+temperature:
+  coder: 0.1      # Low for deterministic code
+  tester: 0.1     # Low for consistent tests
+  planner: 0.3    # Slightly higher for creativity
+  reviewer: 0.2   # Balanced for thorough analysis
+```
+
+### Tips for Optimal Performance
+
+> 💡 **Pro Tip:** Let the root agent orchestrate — avoid manually forcing subagents. The system is designed for autonomous delegation.
+
+- ✅ Use `kimi-for-coding` model for best results
+- ✅ Enable thinking mode for complex tasks
+- ✅ Keep temperature low for code generation agents
+- ✅ Allow the orchestrator to manage the workflow
+- ✅ Provide clear, detailed requirements
+
+---
+
+## 🗺️ Roadmap
+
+<div align="center">
+
+| Status | Feature | Description |
+|:------:|:--------|:------------|
+| ✅ | Core Multi-Agent System | 6 specialized agents with defined roles |
+| ✅ | Dynamic Subagent Creation | Runtime agent spawning |
+| ✅ | Security Framework | Automated security checks |
+| 🚧 | Memory Layer | Persistent context across sessions |
+| 🚧 | Autonomous Orchestration | Self-directed recursive workflows |
+| 📋 | CI Integration | GitHub Actions / GitLab CI support |
+| 📋 | Auto Bootstrap | Project initialization mode |
+
+</div>
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+```bash
+# Fork the repository
+git clone https://github.com/YOUR_USERNAME/kimi-global-agent-team.git
+
+# Create your feature branch
+git checkout -b feature/amazing-feature
+
+# Commit your changes
+git commit -m 'Add amazing feature'
+
+# Push to the branch
+git push origin feature/amazing-feature
+
+# Open a Pull Request
+```
+
+---
+
+## 📄 License
+
+<div align="center">
+
+[![MIT License](https://img.shields.io/badge/License-MIT-96CEB4?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](LICENSE)
+
+**MIT License** — feel free to use this project for personal or commercial purposes.
+
+</div>
+
+---
+
+<div align="center">
+
+<!-- Footer Banner -->
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20&height=120&section=footer" />
+
+<!-- Social Links -->
+<p>
+  <a href="https://github.com/YOUR_USERNAME">
+    <img src="https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github&logoColor=white" />
+  </a>
+  <a href="https://twitter.com/YOUR_HANDLE">
+    <img src="https://img.shields.io/badge/Twitter-1DA1F2?style=for-the-badge&logo=twitter&logoColor=white" />
+  </a>
+  <a href="mailto:your.email@example.com">
+    <img src="https://img.shields.io/badge/Email-D14836?style=for-the-badge&logo=gmail&logoColor=white" />
+  </a>
+</p>
+
+<!-- Made With Love -->
+<p>
+  <img src="https://img.shields.io/badge/Made%20with-❤️-FF6B6B?style=flat-square" />
+  <img src="https://img.shields.io/badge/Powered%20by-Kimi-4ECDC4?style=flat-square" />
+</p>
+
+**⭐ Star this repo if you find it helpful!**
+
+</div>
