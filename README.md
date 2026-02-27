@@ -70,7 +70,7 @@
 
 <div align="center">
 
-[![Live Demo](https://img.shields.io/badge/🔗-Live%20Demo-2E7D32?style=for-the-badge&logo=vercel&logoColor=white)](https://your-demo-link.com)
+[![Live Demo](https://img.shields.io/badge/🔗-Live%20Demo-2E7D32?style=for-the-badge&logo=vercel&logoColor=white)](https://swasthyasetu.onrender.com)
 [![Video Demo](https://img.shields.io/badge/▶️-Video%20Demo-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtube.com/your-video)
 
 </div>

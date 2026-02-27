@@ -34,7 +34,7 @@ if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
 
 # --- Constants ---
-LLM_MODEL_NAME = "gemini-2.5-flash-preview-04-17"
+LLM_MODEL_NAME = "gemini-2.5-flash"
 EMBEDDING_MODEL_NAME = "models/text-embedding-004"
 PDF_DIR = "./pubmed_data/"
 PDF_FILENAME = "pubmed_papers.pdf"
@@ -129,12 +129,18 @@ class AgentState(TypedDict):
 agent_llm = None
 if GOOGLE_API_KEY:
     try:
+        # Strip whitespace to guard against .env formatting issues
+        _clean_key = GOOGLE_API_KEY.strip()
+        genai.configure(api_key=_clean_key)
         agent_llm = genai.GenerativeModel(LLM_MODEL_NAME)
-        agent_llm.generate_content("test", generation_config=genai.types.GenerationConfig(candidate_count=1))
+        logger.info(f"LLM model '{LLM_MODEL_NAME}' initialized successfully.")
     except Exception as e:
+        logger.error(f"Failed to initialize LLM model: {e}")
         agent_llm = None
 else:
+    logger.error("GOOGLE_API_KEY is not set. LLM will not be available.")
     agent_llm = None
+
 
 def diagnostician_node(state: AgentState) -> AgentState:
     logger.info("[Node] Diagnostician: Entry")
@@ -307,8 +313,8 @@ def validator_node(state: AgentState) -> AgentState:
     logger.info("[Node] Validator: Entry")
     initial_diagnosis = state.get("initial_diagnosis")
     symptoms = state.get("symptoms_text")
-    rag_context = state.get("rag_context", [])
-    learn_mode = state.get("learn_mode", False)
+    rag_context = state.get("rag_context") or []
+    learn_mode = state.get("learn_mode") or False
     if not initial_diagnosis or not symptoms:
         logger.warning("Validator skipped: Missing diagnosis or symptoms.")
         return {**state, "validation_results": {"status": "Skipped", "reason": "Missing diagnosis or symptoms."}}
@@ -352,8 +358,8 @@ def validator_node(state: AgentState) -> AgentState:
 def educator_node(state: AgentState) -> AgentState:
     logger.info("[Node] Educator: Entry")
     diagnosis_info = state.get("initial_diagnosis")
-    rag_context = state.get("rag_context", [])
-    learn_mode = state.get("learn_mode", False)
+    rag_context = state.get("rag_context") or []
+    learn_mode = state.get("learn_mode") or False
     if not diagnosis_info or not diagnosis_info.get("primary_diagnosis"):
         logger.warning("Educator skipped: Missing diagnosis.")
         return {**state, "patient_education": {"status": "Skipped", "reason": "Missing diagnosis."}}
@@ -432,13 +438,16 @@ def bias_check_node(state: AgentState) -> AgentState:
 
 def format_output_node(state: AgentState) -> AgentState:
     logger.info("[Node] Output Formatter: Entry")
-    initial_diag = state.get("initial_diagnosis", {})
-    triage = state.get("triage_result", {})
-    routing = state.get("routing_result", {})
-    validation = state.get("validation_results", {})
-    education = state.get("patient_education", {})
-    bias_info = state.get("bias_analysis", {})
-    learn_mode = state.get("learn_mode", False)
+    # Use `or {}` / `or []` to safely handle explicitly-stored None values
+    # (state.get(key, default) only uses the default when the key is MISSING,
+    #  not when it's present but set to None)
+    initial_diag = state.get("initial_diagnosis") or {}
+    triage = state.get("triage_result") or {}
+    routing = state.get("routing_result") or {}
+    validation = state.get("validation_results") or {}
+    education = state.get("patient_education") or {}
+    bias_info = state.get("bias_analysis") or {}
+    learn_mode = state.get("learn_mode") or False
     primary_diagnosis = initial_diag.get("primary_diagnosis", "N/A")
     confidence = initial_diag.get("primary_confidence", 0.0)
     alternatives = initial_diag.get("alternative_diagnoses", [])
