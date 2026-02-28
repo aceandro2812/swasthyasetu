@@ -57,12 +57,30 @@ PDF_DIR = "./pubmed_data/"
 PDF_FILENAME = "pubmed_papers.pdf"
 PDF_FILEPATH = os.path.join(PDF_DIR, PDF_FILENAME)
 
-# Hard limits — with multiple providers the effective quota is multiplied,
-# so we can raise these slightly vs. Gemini-only.
-DIAGNOSE_PER_IP_PER_MINUTE = int(os.getenv("DIAGNOSE_PER_IP_PER_MINUTE", "6"))
-DIAGNOSE_PER_IP_PER_HOUR = int(os.getenv("DIAGNOSE_PER_IP_PER_HOUR", "60"))
-DIAGNOSE_GLOBAL_PER_MINUTE = int(os.getenv("DIAGNOSE_GLOBAL_PER_MINUTE", "30"))
-DIAGNOSE_GLOBAL_PER_HOUR = int(os.getenv("DIAGNOSE_GLOBAL_PER_HOUR", "360"))
+# Hard limits:
+# - Keep conservative defaults for single-provider deployments.
+# - Raise defaults only when multiple providers are configured.
+# Explicit env vars still override these defaults in all cases.
+_provider_count = len(llm_router.status())
+_multi_provider_mode = _provider_count > 1
+
+_default_per_ip_per_minute = "6" if _multi_provider_mode else "4"
+_default_per_ip_per_hour = "60" if _multi_provider_mode else "40"
+_default_global_per_minute = "30" if _multi_provider_mode else "20"
+_default_global_per_hour = "360" if _multi_provider_mode else "240"
+
+DIAGNOSE_PER_IP_PER_MINUTE = int(
+    os.getenv("DIAGNOSE_PER_IP_PER_MINUTE", _default_per_ip_per_minute)
+)
+DIAGNOSE_PER_IP_PER_HOUR = int(
+    os.getenv("DIAGNOSE_PER_IP_PER_HOUR", _default_per_ip_per_hour)
+)
+DIAGNOSE_GLOBAL_PER_MINUTE = int(
+    os.getenv("DIAGNOSE_GLOBAL_PER_MINUTE", _default_global_per_minute)
+)
+DIAGNOSE_GLOBAL_PER_HOUR = int(
+    os.getenv("DIAGNOSE_GLOBAL_PER_HOUR", _default_global_per_hour)
+)
 
 # --- Setup RAG (FAISS + LlamaIndex) ---
 embed_model = None

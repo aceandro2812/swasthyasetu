@@ -186,8 +186,8 @@ class LLMRouter:
 
         Cycles through providers round-robin. On a 429 / rate-limit error
         the offending provider is marked as cooling down and the next provider
-        is tried automatically.  If all providers are cooling down the call
-        waits for the shortest cooldown and retries.
+        is tried automatically. If all providers are cooling down the call
+        fails fast so request handlers are not blocked on long cooldown sleeps.
 
         Returns the LLM response text or an "Error: ..." string on total failure.
         """
@@ -203,15 +203,16 @@ class LLMRouter:
             provider = self._pick_provider()
 
             if provider is None:
-                # All providers cooling down — wait for the shortest cooldown
                 min_wait = min(p.cooldown_remaining() for p in self._providers)
                 logger.warning(
                     f"[Router] All providers cooling down. "
-                    f"Waiting {min_wait:.1f}s for next available..."
+                    f"Failing fast; next provider availability in ~{min_wait:.1f}s."
                 )
-                time.sleep(min_wait + 0.5)
-                attempts += 1
-                continue
+                retry_after = max(1, int(min_wait) + 1)
+                return (
+                    "Error: All LLM providers are currently rate-limited. "
+                    f"Please try again in about {retry_after} seconds."
+                )
 
             try:
                 logger.info(
