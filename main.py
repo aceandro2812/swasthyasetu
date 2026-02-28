@@ -5,14 +5,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.concurrency import run_in_threadpool
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional, TypedDict
 import uvicorn
 import os
 import time
 import json
 import logging
-import warnings
 from dataclasses import dataclass
 from collections import defaultdict, deque
 from threading import Lock
@@ -20,11 +19,9 @@ from uuid import uuid4
 from dotenv import load_dotenv
 # Import AI workflow dependencies
 from llm_router import LLMRouter
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, ServiceContext, StorageContext
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, StorageContext
 from llama_index.vector_stores.faiss import FaissVectorStore
-# Import moved to try-catch block to handle missing google.generativeai dependency
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.indices.prompt_helper import PromptHelper
 import faiss
 import re
 from langgraph.graph import StateGraph, END
@@ -109,7 +106,15 @@ if os.path.exists(PDF_FILEPATH) or os.path.exists(PDF_FILEPATH.replace('.pdf', '
     documents = reader.load_data()
     logger.info(f"Loaded {len(documents) if documents else 0} documents.")
     if documents and embed_model:
-        d = getattr(embed_model, 'embed_dim', 768)
+        # Detect the actual embedding dimension dynamically via a test vector
+        # to avoid silent FAISS corruption if the model changes.
+        try:
+            _test_vec = embed_model.get_text_embedding("test")
+            d = len(_test_vec)
+            logger.info(f"Detected embedding dimension: {d}")
+        except Exception as _e:
+            d = 768  # fallback; only reached if test embedding itself fails
+            logger.warning(f"Could not detect embed_dim dynamically ({_e}); falling back to {d}")
         faiss_index = faiss.IndexFlatL2(d)
         vector_store = FaissVectorStore(faiss_index=faiss_index)
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
@@ -204,8 +209,10 @@ global_diagnose_minute_limiter = InMemoryHardRateLimiter(
 
 # --- Pydantic Models ---
 class DiagnosisRequest(BaseModel):
-    symptoms: str
-    location: str = "India"
+    symptoms: str = Field(..., min_length=5, max_length=2000,
+                          description="Patient symptom description (5–2000 chars)")
+    location: str = Field("India", max_length=100,
+                          description="Patient location for care routing")
     learn_mode: bool = False
 
 
@@ -462,7 +469,7 @@ Provide ONLY the JSON object in your response."""
     llm_response_text = generate_llm_content(prompt)
     if llm_response_text and llm_response_text.startswith("Error:"):
         logger.error(f"Diagnosis LLM Error: {llm_response_text}")
-        return {**state, "error_message": f"Diagnosis LLM Error: {llm_response_text}"}
+        return {**state, "error_message": "Diagnosis service temporarily unavailable. Please try again shortly."}
     diagnosis_json = None
     try:
         diagnosis_json = parse_json_from_llm_text(
@@ -472,7 +479,7 @@ Provide ONLY the JSON object in your response."""
             numeric_keys=["primary_confidence"]
         )
         logger.info("Diagnosis: Diagnosis JSON parsed successfully.")
-        # Store reasoning and guidelines for learn mode
+        # Store reasoning and guidelines for learn mode (immutable copy — do NOT mutate state)
         if learn_mode:
             reasoning_list = []
             guidelines_list = []
@@ -480,8 +487,8 @@ Provide ONLY the JSON object in your response."""
                 reasoning_list.append(diagnosis_json["reasoning"])
             reasoning_list.append(f"Diagnosis based on symptom analysis with {diagnosis_json.get('primary_confidence', 0):.0%} confidence.")
             guidelines_list.append("Diagnostic reasoning based on standard clinical assessment practices.")
-            state["diagnosis_reasoning"] = reasoning_list
-            state["diagnosis_guidelines"] = guidelines_list
+            return {**state, "initial_diagnosis": diagnosis_json, "error_message": None,
+                    "diagnosis_reasoning": reasoning_list, "diagnosis_guidelines": guidelines_list}
     except Exception as e:
         logger.error(f"Diagnosis: Error parsing diagnosis JSON: {e}")
         diagnosis_json = {"status": "Failed", "reason": f"Unexpected error - {e}"}
@@ -524,7 +531,7 @@ Provide ONLY the JSON object in your response."""
     llm_response_text = generate_llm_content(prompt)
     if llm_response_text and llm_response_text.startswith("Error:"):
         logger.error(f"Triage LLM Error: {llm_response_text}")
-        return {**state, "error_message": f"Triage LLM Error: {llm_response_text}"}
+        return {**state, "error_message": "Triage service temporarily unavailable. Please try again shortly."}
     triage_json = None
     try:
         triage_json = parse_json_from_llm_text(
@@ -554,12 +561,16 @@ def care_routing_node(state: AgentState) -> AgentState:
         return {**state, "routing_result": {"status": "Skipped", "reason": "No location provided."}}
     primary_diag = diagnosis_info.get("primary_diagnosis", "medical care") if diagnosis_info else "medical care"
     search_query = f"{primary_diag} treatment in {location}"
+    # Use urllib.parse.urlencode for correct URL encoding (handles &, #, =, etc.)
     routing_result = {
         "search_query": search_query,
         "results": [
-            {"title": f"Search for {primary_diag} specialists near {location}", "url": f"https://www.google.com/search?q={search_query.replace(' ', '+')}"},
-            {"title": f"Find hospitals in {location}", "url": f"https://www.google.com/search?q=hospitals+in+{location.replace(' ', '+')}"},
-            {"title": f"{primary_diag} - Patient Information", "url": f"https://www.google.com/search?q={primary_diag.replace(' ', '+')}+patient+information"}
+            {"title": f"Search for {primary_diag} specialists near {location}",
+             "url": f"https://www.google.com/search?{urllib.parse.urlencode({'q': search_query})}"},
+            {"title": f"Find hospitals in {location}",
+             "url": f"https://www.google.com/search?{urllib.parse.urlencode({'q': f'hospitals in {location}'})}"},
+            {"title": f"{primary_diag} - Patient Information",
+             "url": f"https://www.google.com/search?{urllib.parse.urlencode({'q': f'{primary_diag} patient information'})}"}
         ],
         "status": "Success",
         "reason": "Generated search links for local care."
@@ -610,7 +621,7 @@ Provide ONLY the JSON object in your response."""
     llm_response_text = generate_llm_content(prompt)
     if llm_response_text and llm_response_text.startswith("Error:"):
         logger.error(f"Validator LLM Error: {llm_response_text}")
-        return {**state, "error_message": f"Validator LLM Error: {llm_response_text}"}
+        return {**state, "error_message": "Validation service temporarily unavailable. Please try again shortly."}
     validation_json = None
     try:
         validation_json = parse_json_from_llm_text(
@@ -668,7 +679,7 @@ Provide ONLY the JSON object in your response."""
     llm_response_text = generate_llm_content(prompt)
     if llm_response_text and llm_response_text.startswith("Error:"):
         logger.error(f"Educator LLM Error: {llm_response_text}")
-        return {**state, "error_message": f"Educator LLM Error: {llm_response_text}"}
+        return {**state, "error_message": "Patient education service temporarily unavailable. Please try again shortly."}
     education_json = None
     try:
         education_json = parse_json_from_llm_text(
@@ -732,7 +743,7 @@ Provide ONLY the JSON object in your response."""
     llm_response_text = generate_llm_content(prompt)
     if llm_response_text and llm_response_text.startswith("Error:"):
         logger.error(f"Bias Check LLM Error: {llm_response_text}")
-        return {**state, "error_message": f"Bias Check LLM Error: {llm_response_text}"}
+        return {**state, "error_message": "Bias check service temporarily unavailable. Please try again shortly."}
     bias_json = None
     try:
         bias_json = parse_json_from_llm_text(
@@ -764,13 +775,10 @@ def format_output_node(state: AgentState) -> AgentState:
     confidence = initial_diag.get("primary_confidence", 0.0)
     alternatives = initial_diag.get("alternative_diagnoses", [])
     
-    # Generate visual aid URL if not already generated
+    # The visual_aid_url is generated by educator_node and is seed-deterministic
+    # (based on diagnosis name), so regenerating here would produce the same URL.
+    # We simply read it from the education dict — no redundant call needed.
     visual_url = education.get("visual_aid_url", "")
-    if not visual_url and primary_diagnosis != "N/A":
-        visual_url = generate_visual_aid_url(
-            diagnosis=primary_diagnosis,
-            explanation=education.get("explanation", "")
-        )
     
     diagnosis_part = {
         "primary": primary_diagnosis,
@@ -807,7 +815,7 @@ def format_output_node(state: AgentState) -> AgentState:
     if bias_info.get("status") == "Failed":
         equity_part["status"] = "Failed: " + bias_info.get("reason", "Unknown")
     final_report = {
-        "patient_id": f"ANON-{int(time.time()) % 10000}",
+        "patient_id": f"ANON-{str(uuid4())[:8].upper()}",
         "diagnosis": diagnosis_part,
         "triage": triage_part,
         "routing": routing_part,
@@ -946,10 +954,11 @@ async def diagnose(request: Request, diagnosis_request: DiagnosisRequest):
         error_message = result.get("error_message")
         
         if error_message:
-            logger.error(f"Workflow error: {error_message}")
+            # Log full details server-side only — do NOT expose partial AI chain output to client
+            logger.error(f"Workflow error: {error_message} | partial_report keys: {list((final_report or {}).keys())}")
             return JSONResponse(
                 status_code=500,
-                content={"error": error_message, "partial_report": final_report}
+                content={"error": "The AI workflow encountered an error. Please try again shortly."}
             )
         
         # Add rate limit headers
