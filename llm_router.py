@@ -93,6 +93,7 @@ class LLMRouter:
                         config=genai_types.GenerateContentConfig(
                             response_mime_type="application/json",
                             temperature=0.2,
+                            timeout=30,
                         ),
                     )
                     if response.text:
@@ -139,6 +140,7 @@ class LLMRouter:
                                 model=mid,
                                 messages=[{"role": "user", "content": prompt}],
                                 temperature=0.2,
+                                timeout=30,
                                 extra_headers={
                                     "HTTP-Referer": "https://medsarathi.onrender.com",
                                     "X-Title": "MedSarathi Health AI",
@@ -177,8 +179,8 @@ class LLMRouter:
     # Public API
     # ------------------------------------------------------------------
     def is_available(self) -> bool:
-        """Return True if at least one provider is registered."""
-        return bool(self._providers)
+        """Return True if at least one provider is registered AND not currently cooling down."""
+        return any(p.is_available() for p in self._providers)
 
     def generate_content(self, prompt: str, max_attempts: Optional[int] = None) -> str:
         """

@@ -1,0 +1,82 @@
+# SwasthyaSetu FastAPI - Docker Compose Configuration
+# This file defines the production-ready container setup for the SwasthyaSetu application.
+
+version: "3.8"
+
+services:
+  swasthyasetu:
+    # Service name for the FastAPI application
+    container_name: swasthyasetu-api
+    
+    # Build from the Dockerfile in the current directory
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    # Port mapping: host:container
+    ports:
+      - "8000:8000"
+    
+    # Load environment variables from .env file
+    env_file:
+      - .env
+    
+    # Additional environment variables for production
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - UVICORN_WORKERS=4
+      - UVICORN_HOST=0.0.0.0
+      - UVICORN_PORT=8000
+      - ENVIRONMENT=production
+      # Logging configuration
+      - LOG_LEVEL=INFO
+      # Rate limiting configuration (optional overrides)
+      # - DIAGNOSE_PER_IP_PER_MINUTE=4
+      # - DIAGNOSE_PER_IP_PER_HOUR=30
+      # - DIAGNOSE_GLOBAL_PER_MINUTE=20
+      # - DIAGNOSE_GLOBAL_PER_HOUR=240
+    
+    # Volume mounts for persistent data and application files
+    volumes:
+      # Static files (CSS, JS, images)
+      - ./static:/app/static:ro
+      # HTML templates
+      - ./templates:/app/templates:ro
+      # PubMed data directory for RAG (read-write for potential updates)
+      - ./pubmed_data:/app/pubmed_data
+      # Optional: Persistent storage for FAISS index or other data
+      - swasthyasetu-data:/app/data
+    
+    # Health check configuration
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # Restart policy: restart unless manually stopped
+    restart: unless-stopped
+    
+    # Resource limits (optional, uncomment if needed)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2.0'
+    #       memory: 4G
+    #     reservations:
+    #       cpus: '1.0'
+    #       memory: 2G
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Named volumes for persistent storage
+volumes:
+  swasthyasetu-data:
+    driver: local

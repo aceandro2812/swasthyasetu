@@ -1,0 +1,114 @@
+# SwasthyaSetu - Docker Ignore File
+# Excludes unnecessary files from Docker build context
+# =====================================================
+
+# Python Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python Cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Build Artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# IDE and Editor Files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+.vs/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Environment and Secrets
+.env
+.env.local
+.env.*.local
+.env.development
+.env.test
+.env.production
+*.env
+secrets/
+secrets.json
+config.json
+
+# Documentation (not needed in production container)
+*.md
+!README.md
+walkthrough*.md*
+TECHNICAL_DOC.md
+docs/
+
+# Test Files
+tests/
+test_*.py
+*_test.py
+pytest.ini
+tox.ini
+.coverage
+htmlcov/
+.pytest_cache/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+azure-pipelines.yml
+Jenkinsfile
+
+# Docker Files (not needed inside container)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Video and Large Media Files (not needed in backend container)
+*.webm
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Jupyter Notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# UV Lock File (large, not needed if pyproject.toml is present)
+# Note: If you use uv for installation in container, you might want to keep this
+# uv.lock
+
+# Render Deployment Config (platform-specific)
+render.yaml
+
+# Local Data (should use volumes in production)
+# Uncomment if pubmed_data should be excluded and mounted as volume
+# pubmed_data/
+
+# Temporary Files
+*.tmp
+*.temp
+*.log
+logs/
+tmp/
+temp/
+
+# OS Generated Files
+Thumbs.db
+.DS_Store
+*.bak

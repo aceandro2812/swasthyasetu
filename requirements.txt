@@ -3,7 +3,7 @@ uvicorn
 jinja2
 python-dotenv
 requests
-beautifulsoup4
+# beautifulsoup4  # not imported anywhere in the project — removed to reduce image size
 # For AI workflow dependencies:
 langgraph
 llama-index
@@ -12,7 +12,7 @@ google-genai
 llama-index-vector-stores-faiss
 llama-index-embeddings-gemini
 llama-index-readers-file
-sentence-transformers
-torch
+# sentence-transformers  # not used — embedding is done via GeminiEmbedding; removed (~1.5 GB saved)
+# torch                  # pulled in by sentence-transformers above; commented out together
 # OpenAI SDK used as the client for OpenRouter's OpenAI-compatible API (free models)
 openai
