@@ -14,10 +14,11 @@ import logging
 import warnings
 from dotenv import load_dotenv
 # Import AI workflow dependencies
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, ServiceContext, StorageContext
 from llama_index.vector_stores.faiss import FaissVectorStore
-from llama_index.embeddings.gemini import GeminiEmbedding
+# Import moved to try-catch block to handle missing google.generativeai dependency
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.indices.prompt_helper import PromptHelper
 import faiss
@@ -29,17 +30,6 @@ import requests
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# --- Configure Google Generative AI ---
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-
-# --- Constants ---
-LLM_MODEL_NAME = "gemini-2.5-flash"
-EMBEDDING_MODEL_NAME = "models/text-embedding-004"
-PDF_DIR = "./pubmed_data/"
-PDF_FILENAME = "pubmed_papers.pdf"
-PDF_FILEPATH = os.path.join(PDF_DIR, PDF_FILENAME)
-
 # --- Logging Setup ---
 logging.basicConfig(
     level=logging.INFO,
@@ -48,17 +38,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger("swasthyasetu")
 
+# --- Initialize Google Gen AI Client ---
+client = None
+if GOOGLE_API_KEY:
+    try:
+        # Strip whitespace to guard against .env formatting issues
+        _clean_key = GOOGLE_API_KEY.strip()
+        client = genai.Client(api_key=_clean_key)
+        logger.info("Google Gen AI Client initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Google Gen AI Client: {e}")
+        client = None
+else:
+    logger.error("GOOGLE_API_KEY is not set. LLM will not be available.")
+
+# --- Constants ---
+LLM_MODEL_NAME = "gemini-2.5-flash"
+EMBEDDING_MODEL_NAME = "models/text-embedding-004"
+PDF_DIR = "./pubmed_data/"
+PDF_FILENAME = "pubmed_papers.pdf"
+PDF_FILEPATH = os.path.join(PDF_DIR, PDF_FILENAME)
+
+
+
+
 # --- Setup RAG (FAISS + LlamaIndex) ---
 embed_model = None
 try:
+    from llama_index.embeddings.gemini import GeminiEmbedding
     logger.info("Initializing Gemini Embedding model...")
     embed_model = GeminiEmbedding(model_name=EMBEDDING_MODEL_NAME, api_key=GOOGLE_API_KEY)
     logger.info("Gemini Embedding model initialized.")
 except Exception as e:
-    logger.warning(f"Gemini Embedding failed: {e}. Falling back to HuggingFace embedding.")
-    from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-    embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-    logger.info("HuggingFace Embedding model initialized.")
+    logger.warning(f"Gemini Embedding not available ({e}). RAG will be disabled.")
 
 query_engine = None
 documents = None
@@ -84,24 +96,25 @@ else:
 # --- Helper: Robust LLM Call ---
 def generate_gemini_content_with_retry(model_name, prompt, max_retries=3, initial_delay=2):
     logger.info(f"LLM call: model={model_name}, prompt_length={len(prompt)}")
-    if not GOOGLE_API_KEY:
-        logger.error("Gemini API key not configured.")
-        return "Error: Gemini API key not configured."
-    llm = genai.GenerativeModel(model_name)
+    if not client:
+        logger.error("Google Gen AI Client not initialized.")
+        return "Error: Google Gen AI Client not initialized."
+    
     delay = initial_delay
     for attempt in range(max_retries):
         try:
             start = time.time()
-            response = llm.generate_content(prompt)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
             duration = time.time() - start
             logger.info(f"LLM response received in {duration:.2f}s (attempt {attempt+1})")
-            if hasattr(response, 'text') and response.text:
+            
+            if response.text:
                 return response.text
             else:
-                try:
-                    return " ".join(part.text for part in response.parts if hasattr(part, 'text'))
-                except Exception:
-                    return "Error: Failed to extract text from Gemini response."
+                return "Error: Empty response from Gemini."
         except Exception as e:
             logger.warning(f"LLM call failed (attempt {attempt+1}): {e}")
             time.sleep(delay)
@@ -126,20 +139,7 @@ class AgentState(TypedDict):
     bias_analysis: Optional[Dict[str, Any]]
     error_message: Optional[str]
 
-agent_llm = None
-if GOOGLE_API_KEY:
-    try:
-        # Strip whitespace to guard against .env formatting issues
-        _clean_key = GOOGLE_API_KEY.strip()
-        genai.configure(api_key=_clean_key)
-        agent_llm = genai.GenerativeModel(LLM_MODEL_NAME)
-        logger.info(f"LLM model '{LLM_MODEL_NAME}' initialized successfully.")
-    except Exception as e:
-        logger.error(f"Failed to initialize LLM model: {e}")
-        agent_llm = None
-else:
-    logger.error("GOOGLE_API_KEY is not set. LLM will not be available.")
-    agent_llm = None
+
 
 
 def diagnostician_node(state: AgentState) -> AgentState:
@@ -166,9 +166,9 @@ def diagnostician_node(state: AgentState) -> AgentState:
         logger.warning("Diagnostician: RAG context not available.")
         rag_context_str = "\n\nRelevant Medical Context: [Not Available]"
         state["rag_context"] = ["[Not Available]"]
-    if not agent_llm:
-        logger.error("Diagnostician failed: LLM not initialized.")
-        return {**state, "error_message": "Diagnostician failed: LLM not initialized."}
+    if not client:
+        logger.error("Diagnostician failed: LLM client not initialized.")
+        return {**state, "error_message": "Diagnostician failed: LLM client not initialized."}
     prompt = f"""Act as a medical diagnosis assistant. Based ONLY on the provided symptoms and relevant medical context (if available), generate a differential diagnosis.\n\nPatient Symptoms:\n{symptoms}{rag_context_str}\n\nInstructions:\n1. Analyze the symptoms and context.\n2. Generate a list of possible diagnoses (differentials).\n3. For each diagnosis, provide a confidence score (0.0 to 1.0) indicating your certainty based *only* on the provided information. Higher scores mean higher likelihood.\n4. Identify the most likely primary diagnosis.\n5. Structure your output as a JSON object with the following EXACT keys: \"primary_diagnosis\", \"primary_confidence\", \"alternative_diagnoses\" (which should be a list of strings).\n\nProvide ONLY the JSON object in your response."""
     llm_response_text = generate_gemini_content_with_retry(LLM_MODEL_NAME, prompt)
     if llm_response_text and llm_response_text.startswith("Error:"):
@@ -210,9 +210,9 @@ def triage_agent_node(state: AgentState) -> AgentState:
     if not diagnosis or not symptoms:
         logger.warning("Triage Agent skipped: Missing diagnosis or symptoms.")
         return {**state, "triage_result": {"status": "Skipped", "reason": "Missing diagnosis or symptoms."}}
-    if not agent_llm:
-        logger.error("Triage Agent failed: LLM not initialized.")
-        return {**state, "triage_result": {"status": "Failed", "reason": "LLM not initialized."}, "error_message": "Triage Agent failed: LLM not initialized."}
+    if not client:
+        logger.error("Triage Agent failed: LLM client not initialized.")
+        return {**state, "triage_result": {"status": "Failed", "reason": "LLM client not initialized."}, "error_message": "Triage Agent failed: LLM client not initialized."}
     primary_diag = diagnosis.get("primary_diagnosis", "N/A")
     confidence = diagnosis.get("primary_confidence", 0.0)
     prompt = f"""
@@ -318,9 +318,9 @@ def validator_node(state: AgentState) -> AgentState:
     if not initial_diagnosis or not symptoms:
         logger.warning("Validator skipped: Missing diagnosis or symptoms.")
         return {**state, "validation_results": {"status": "Skipped", "reason": "Missing diagnosis or symptoms."}}
-    if not agent_llm:
-        logger.error("Validator failed: LLM not initialized.")
-        return {**state, "error_message": "Validator failed: LLM not initialized."}
+    if not client:
+        logger.error("Validator failed: LLM client not initialized.")
+        return {**state, "error_message": "Validator failed: LLM client not initialized."}
     primary_diag = initial_diagnosis.get("primary_diagnosis", "N/A")
     confidence = initial_diagnosis.get("primary_confidence", "N/A")
     alternatives = initial_diagnosis.get("alternative_diagnoses", [])
@@ -363,9 +363,9 @@ def educator_node(state: AgentState) -> AgentState:
     if not diagnosis_info or not diagnosis_info.get("primary_diagnosis"):
         logger.warning("Educator skipped: Missing diagnosis.")
         return {**state, "patient_education": {"status": "Skipped", "reason": "Missing diagnosis."}}
-    if not agent_llm:
-        logger.error("Educator failed: LLM not initialized.")
-        return {**state, "error_message": "Educator failed: LLM not initialized."}
+    if not client:
+        logger.error("Educator failed: LLM client not initialized.")
+        return {**state, "error_message": "Educator failed: LLM client not initialized."}
     primary_diag = diagnosis_info.get("primary_diagnosis")
     rag_context_str = "\n---\n".join(rag_context) if rag_context else "[Not Available]"
     prompt = f"""Act as a patient educator AI. You are given a medical diagnosis and relevant context.\n\nDiagnosis: {primary_diag}\n\nRelevant Medical Context (from PubMed abstracts):\n{rag_context_str}\n\nYour Task: Generate patient education material based *only* on the provided diagnosis and context.\n1.  **Explanation:** Provide a simple, patient-friendly explanation of what '{primary_diag}' is (approx. 2-3 sentences). Avoid jargon.\n2.  **Medication Info:** Scan the 'Relevant Medical Context'. If specific medications for treating '{primary_diag}' are mentioned, list them. If not, state \"Consult your physician for medication options.\" Do NOT invent medications.\n3.  **Next Steps/Lifestyle:** Suggest 2-3 general, safe next steps or lifestyle considerations relevant to this type of condition (e.g., follow-up appointments, rest, hydration, seeking professional advice for specifics). Emphasize consulting a healthcare professional.\n4.  **Visual Placeholder:** Generate a descriptive filename for a hypothetical explanatory visual (e.g., 'Animation_showing_{primary_diag.replace(' ','_')}.mp4').\n\nProvide your output as a JSON object with the following keys:\n- \"explanation\": (string) Patient-friendly explanation.\n- \"medication_info\": (string) Mentioned medications or consultation advice.\n- \"next_steps\": (list of strings) General advice points.\n- \"visual_placeholder_filename\": (string) Generated filename for the visual.\n\nProvide ONLY the JSON object in your response."""
@@ -405,9 +405,9 @@ def bias_check_node(state: AgentState) -> AgentState:
     if not initial_diagnosis or not symptoms:
         logger.warning("Bias Check skipped: Missing diagnosis or symptoms.")
         return {**state, "bias_analysis": {"status": "Skipped", "reason": "Missing diagnosis or symptoms."}}
-    if not agent_llm:
-        logger.error("Bias Check failed: LLM not initialized.")
-        return {**state, "error_message": "Bias Check failed: LLM not initialized."}
+    if not client:
+        logger.error("Bias Check failed: LLM client not initialized.")
+        return {**state, "error_message": "Bias Check failed: LLM client not initialized."}
     diagnosis_summary = f"Primary: {initial_diagnosis.get('primary_diagnosis', 'N/A')}, Confidence: {initial_diagnosis.get('primary_confidence', 'N/A')}, Alternatives: {initial_diagnosis.get('alternative_diagnoses', [])}"
     prompt = f"""Analyze the following diagnosis information for potential biases. Focus specifically on:\n1.  **Gender/racial stereotypes:** Does the diagnosis or the way it might have been reached rely on assumptions about specific genders or races?\n2.  **Socioeconomic assumptions:** Does the potential diagnosis path or suggested alternatives implicitly assume a certain socioeconomic status (e.g., access to specific tests, lifestyle factors)?\n3.  **Cultural competency:** Could the symptoms presentation or interpretation be influenced by cultural factors not accounted for? Are there potential cultural adaptations needed for communication or treatment?\n\nPatient Symptoms:\n{symptoms}\n\nAI-Generated Diagnosis Summary:\n{diagnosis_summary}\n\nInstructions:\n- Critically evaluate based on the three points above.\n- Provide a qualitative assessment. Note specific concerns if any.\n- Suggest potential cultural adaptations if relevant (e.g., language considerations, culturally sensitive explanations).\n- Assign a hypothetical bias risk score from 0.0 (very low risk) to 1.0 (high risk detected). This is subjective based on your analysis.\n- Structure your output as a JSON object with keys: \"bias_risk_score\" (float), \"potential_biases_identified\" (list of strings describing concerns), \"suggested_cultural_adaptations\" (list of strings).\n\nProvide ONLY the JSON object in your response."""
     llm_response_text = generate_gemini_content_with_retry(LLM_MODEL_NAME, prompt)

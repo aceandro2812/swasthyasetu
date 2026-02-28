@@ -31,11 +31,13 @@ else:
 # ──────────────────────────────────────────────
 print(f"\n[2] Direct Gemini API Check")
 try:
-    import google.generativeai as genai
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.5-flash-preview-04-17")
-    resp = model.generate_content("Reply with just the word: OK")
-    gemini_ok = resp.text.strip() if hasattr(resp, "text") else ""
+    from google import genai
+    client = genai.Client(api_key=api_key)
+    resp = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents="Reply with just the word: OK"
+    )
+    gemini_ok = resp.text.strip() if resp.text else ""
     print(f"    Gemini API response    : {gemini_ok!r}")
     print(f"    Status                 : {'✅ WORKING' if gemini_ok else '❌ EMPTY RESPONSE'}")
 except Exception as e:

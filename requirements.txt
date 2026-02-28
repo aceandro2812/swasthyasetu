@@ -6,7 +6,7 @@ python-dotenv
 langgraph
 llama-index
 faiss-cpu
-google-generativeai
+google-genai
 llama-index-vector-stores-faiss
 llama-index-embeddings-gemini
 llama-index-readers-file
