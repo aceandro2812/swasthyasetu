@@ -238,7 +238,7 @@ flowchart TD
 
 ```bash
 # Clone and setup in one go
-git clone https://github.com/your-org/swasthyasetu.git && cd swasthyasetu && pip install -r requirements.txt
+git clone https://github.com/aceandro2812/swasthyasetu.git && cd swasthyasetu && python -m venv .venv && .\.venv\Scripts\activate && pip install -r requirements.txt
 ```
 
 </details>
@@ -248,7 +248,7 @@ git clone https://github.com/your-org/swasthyasetu.git && cd swasthyasetu && pip
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-org/swasthyasetu.git
+git clone https://github.com/aceandro2812/swasthyasetu.git
 cd swasthyasetu
 
 # 2. Install dependencies
@@ -259,7 +259,11 @@ cp .env.example .env
 # Edit .env and add your GEMINI_API_KEY
 
 # 4. Start the server
-uvicorn main:app --reload
+# Windows (PowerShell)
+.\.venv\Scripts\activate; uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# Unix/macOS
+source .venv/bin/activate && uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # 5. Open in browser
 # Navigate to http://localhost:8000
@@ -424,7 +428,7 @@ We welcome contributions from developers, healthcare professionals, and accessib
 
 ```bash
 # Fork and contribute
-git clone https://github.com/your-org/swasthyasetu.git
+git clone https://github.com/aceandro2812/swasthyasetu.git
 git checkout -b feature/amazing-feature
 git commit -m "✨ Add amazing feature"
 git push origin feature/amazing-feature
