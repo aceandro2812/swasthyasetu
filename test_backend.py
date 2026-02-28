@@ -21,8 +21,7 @@ print(f"{'='*60}")
 print(f"\n[1] Environment Check")
 print(f"    GOOGLE_API_KEY present : {'YES' if api_key else 'NO'}")
 if api_key:
-    print(f"    Key preview            : {api_key[:10]}...{api_key[-4:]}")
-    print(f"    Key length             : {len(api_key)} chars")
+    print("    Key format             : Present (masked)")
 else:
     print("    ERROR: API key missing! Check your .env file.")
 

@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const reportSection = document.getElementById('report-section');
   const reportContent = document.getElementById('report-content');
   const reportError = document.getElementById('report-error');
+  const rateLimitAlert = document.getElementById('rate-limit-alert');
   const exampleBtn = document.getElementById('example-btn');
   const clearBtn = document.getElementById('clear-btn');
   const exampleChips = document.querySelectorAll('.example-chip');
@@ -57,6 +58,48 @@ document.addEventListener('DOMContentLoaded', function() {
     progressStep.textContent = '';
   }
 
+  function escapeHtml(input) {
+    if (input === null || input === undefined) return '';
+    return String(input)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function sanitizeUrl(url) {
+    try {
+      const parsed = new URL(String(url), window.location.origin);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.href;
+    } catch (_) {}
+    return '#';
+  }
+
+  function sanitizeDeep(value) {
+    if (typeof value === 'string') return escapeHtml(value);
+    if (Array.isArray(value)) return value.map(sanitizeDeep);
+    if (value && typeof value === 'object') {
+      const out = {};
+      Object.keys(value).forEach((k) => {
+        out[k] = sanitizeDeep(value[k]);
+      });
+      return out;
+    }
+    return value;
+  }
+
+  function sanitizeReport(report) {
+    const safe = sanitizeDeep(report || {});
+    if (safe?.routing?.results && Array.isArray(safe.routing.results)) {
+      safe.routing.results = safe.routing.results.map((item) => ({
+        title: item?.title || '',
+        url: sanitizeUrl(item?.url),
+      }));
+    }
+    return safe;
+  }
+
   form.addEventListener('submit', async function(e) {
     e.preventDefault();
     const symptoms = symptomsInput.value.trim();
@@ -83,6 +126,7 @@ document.addEventListener('DOMContentLoaded', function() {
     setProgress(1);
     reportSection.classList.add('hidden');
     reportError.classList.add('hidden');
+    if (rateLimitAlert) rateLimitAlert.classList.add('hidden');
     reportContent.innerHTML = '';
     try {
       setProgress(2);
@@ -92,9 +136,18 @@ document.addEventListener('DOMContentLoaded', function() {
         body: JSON.stringify({ symptoms, location, learn_mode })
       });
       setProgress(4);
-      const data = await response.json();
+      let data = {};
+      try {
+        data = await response.json();
+      } catch (_) {
+        data = {};
+      }
       setProgress(7);
-      if (data.status === 'success') {
+      if (response.status === 429) {
+        showRateLimit(data);
+      } else if (!response.ok) {
+        showError(data.error || `Request failed (${response.status}).`);
+      } else if (data.status === 'success') {
         renderReport(data.report);
         setProgress(8);
         reportSection.classList.remove('hidden');
@@ -110,8 +163,29 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 
   function showError(msg) {
+    if (rateLimitAlert) rateLimitAlert.classList.add('hidden');
     reportError.textContent = 'Error: ' + msg;
     reportError.classList.remove('hidden');
+    reportSection.classList.remove('hidden');
+  }
+
+  function showRateLimit(data) {
+    if (!rateLimitAlert) {
+      showError('Rate limit reached. Please retry later.');
+      return;
+    }
+    const retryAfter = Number(data?.retry_after_seconds || 0);
+    const minuteLimit = Number(data?.limits?.minute || 0);
+    const hourLimit = Number(data?.limits?.hour || 0);
+    const waitText = retryAfter > 0
+      ? `Please wait ${retryAfter} second${retryAfter === 1 ? '' : 's'} before retrying.`
+      : 'Please wait a short while before retrying.';
+    const limitText = (minuteLimit || hourLimit)
+      ? `Hard limits: ${minuteLimit || '-'} requests/min and ${hourLimit || '-'} requests/hour.`
+      : '';
+    rateLimitAlert.textContent = `Rate limit reached. ${waitText} ${limitText}`.trim();
+    rateLimitAlert.classList.remove('hidden');
+    reportError.classList.add('hidden');
     reportSection.classList.remove('hidden');
   }
 
@@ -127,6 +201,7 @@ document.addEventListener('DOMContentLoaded', function() {
     reportSection.classList.add('hidden');
     reportContent.innerHTML = '';
     reportError.classList.add('hidden');
+    if (rateLimitAlert) rateLimitAlert.classList.add('hidden');
   });
 
   exampleChips.forEach(chip => {
@@ -143,10 +218,19 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 
   function renderReport(report) {
+    report = sanitizeReport(report);
     if (!report || !report.diagnosis) {
       showError('No report data.');
       return;
     }
+    report.diagnosis = report.diagnosis || {};
+    report.triage = report.triage || {};
+    report.routing = report.routing || {};
+    report.education = report.education || {};
+    report.equity_check = report.equity_check || {};
+    report.debug_info = report.debug_info || {};
+    report.reasoning = Array.isArray(report.reasoning) ? report.reasoning : [];
+    report.guidelines = Array.isArray(report.guidelines) ? report.guidelines : [];
     let html = '';
     
     // Diagnosis Card
@@ -191,8 +275,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Triage Card
     if (report.triage) {
-      const isEmergency = report.triage.level.toLowerCase().includes('emergency');
-      const isUrgent = report.triage.level.toLowerCase().includes('urgent');
+      const triageLevelText = String(report.triage.level || '');
+      const triageLevelLower = triageLevelText.toLowerCase();
+      const isEmergency = triageLevelLower.includes('emergency');
+      const isUrgent = triageLevelLower.includes('urgent');
       
       let levelColor = 'text-[#138808]';
       let bgColor = 'bg-green-50/50';
@@ -256,7 +342,7 @@ document.addEventListener('DOMContentLoaded', function() {
         html += `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">`;
         report.routing.results.forEach(r => {
           html += `
-            <a href="${r.url}" target="_blank" class="block bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 p-4 rounded-xl transition-all group shadow-sm hover:shadow">
+            <a href="${r.url}" target="_blank" rel="noopener noreferrer" class="block bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 p-4 rounded-xl transition-all group shadow-sm hover:shadow">
               <h4 class="font-bold text-slate-800 group-hover:text-indigo-700 line-clamp-2 mb-2 text-sm">${r.title}</h4>
               <div class="flex items-center text-xs font-semibold text-indigo-600 group-hover:text-indigo-800">
                 View Search Result <svg class="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
@@ -378,6 +464,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     reportContent.innerHTML = html;
     reportError.classList.add('hidden');
+    if (rateLimitAlert) rateLimitAlert.classList.add('hidden');
     
     // Advanced section (hidden by default) - Dark Theme
     let adv = '';

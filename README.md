@@ -278,7 +278,43 @@ source .venv/bin/activate && uvicorn main:app --reload --host 0.0.0.0 --port 800
 GEMINI_API_KEY=your_gemini_api_key_here
 DEBUG=false
 LOG_LEVEL=INFO
+
+# Hard rate limits (below upstream model API limits)
+DIAGNOSE_PER_IP_PER_MINUTE=4
+DIAGNOSE_PER_IP_PER_HOUR=30
+DIAGNOSE_GLOBAL_PER_MINUTE=20
+DIAGNOSE_GLOBAL_PER_HOUR=240
 ```
+
+---
+
+## Security and Reliability Updates
+
+### Hard Rate Limiting
+- `POST /diagnose` now uses strict hard limits in rolling windows:
+1. Per-client (IP): minute and hour limits
+2. Global: minute and hour limits
+- Limit breaches return `429` with:
+1. `Retry-After`
+2. `X-RateLimit-*` headers
+3. JSON payload (`error_code`, `retry_after_seconds`, `limits`)
+
+### UI Behavior for Rate Limits
+- The web UI now shows a dedicated rate-limit alert whenever a `429` is returned.
+- The alert includes retry wait time and current hard-limit values.
+
+### Security Hardening
+- Frontend report rendering is sanitized to reduce XSS risk from model/external content.
+- External links are constrained to safe URLs and use `rel=\"noopener noreferrer\"`.
+- Raw backend exception text is no longer returned to clients; generic error + `error_id` is returned.
+- Async request path now offloads LangGraph execution to a threadpool to avoid event-loop blocking.
+- CORS keeps wildcard origin support with `allow_credentials=False`.
+
+### Dependency/Runtime Fixes
+- Added missing runtime dependencies:
+1. `requests`
+2. `beautifulsoup4`
+- Test script output no longer prints API key fragments.
 
 ---
 

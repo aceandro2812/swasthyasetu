@@ -3,6 +3,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.concurrency import run_in_threadpool
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional, TypedDict
@@ -12,6 +13,10 @@ import time
 import json
 import logging
 import warnings
+from dataclasses import dataclass
+from collections import defaultdict, deque
+from threading import Lock
+from uuid import uuid4
 from dotenv import load_dotenv
 # Import AI workflow dependencies
 from google import genai
@@ -59,8 +64,11 @@ PDF_DIR = "./pubmed_data/"
 PDF_FILENAME = "pubmed_papers.pdf"
 PDF_FILEPATH = os.path.join(PDF_DIR, PDF_FILENAME)
 
-
-
+# Hard limits intentionally lower than Gemini service limits to reduce upstream 429 risk.
+DIAGNOSE_PER_IP_PER_MINUTE = int(os.getenv("DIAGNOSE_PER_IP_PER_MINUTE", "4"))
+DIAGNOSE_PER_IP_PER_HOUR = int(os.getenv("DIAGNOSE_PER_IP_PER_HOUR", "30"))
+DIAGNOSE_GLOBAL_PER_MINUTE = int(os.getenv("DIAGNOSE_GLOBAL_PER_MINUTE", "20"))
+DIAGNOSE_GLOBAL_PER_HOUR = int(os.getenv("DIAGNOSE_GLOBAL_PER_HOUR", "240"))
 
 # --- Setup RAG (FAISS + LlamaIndex) ---
 embed_model = None
@@ -93,6 +101,147 @@ if os.path.exists(PDF_FILEPATH) or os.path.exists(PDF_FILEPATH.replace('.pdf', '
 else:
     logger.warning("No PubMed data file found; RAG will be unavailable.")
 
+
+@dataclass
+class RateLimitDecision:
+    allowed: bool
+    retry_after_seconds: int
+    limit_per_minute: int
+    remaining_minute: int
+    limit_per_hour: int
+    remaining_hour: int
+
+
+class InMemoryHardRateLimiter:
+    """Simple in-memory hard limiter.
+    Note: per-process only. For multi-worker deploys, use Redis/shared storage.
+    """
+
+    def __init__(self, per_minute: int, per_hour: int) -> None:
+        self.per_minute = max(1, per_minute)
+        self.per_hour = max(1, per_hour)
+        self._events: Dict[str, deque[float]] = defaultdict(deque)
+        self._lock = Lock()
+
+    def _prune(self, events: deque[float], now: float) -> None:
+        one_hour_ago = now - 3600
+        while events and events[0] <= one_hour_ago:
+            events.popleft()
+
+    def check(self, key: str) -> RateLimitDecision:
+        now = time.time()
+        with self._lock:
+            events = self._events[key]
+            self._prune(events, now)
+
+            minute_cutoff = now - 60
+            minute_count = sum(1 for t in events if t > minute_cutoff)
+            hour_count = len(events)
+
+            minute_allowed = minute_count < self.per_minute
+            hour_allowed = hour_count < self.per_hour
+
+            if minute_allowed and hour_allowed:
+                events.append(now)
+                return RateLimitDecision(
+                    allowed=True,
+                    retry_after_seconds=0,
+                    limit_per_minute=self.per_minute,
+                    remaining_minute=max(0, self.per_minute - (minute_count + 1)),
+                    limit_per_hour=self.per_hour,
+                    remaining_hour=max(0, self.per_hour - (hour_count + 1)),
+                )
+
+            retry_after = 60
+            if not minute_allowed:
+                minute_events = [t for t in events if t > minute_cutoff]
+                if minute_events:
+                    retry_after = max(1, int(minute_events[0] + 60 - now))
+            if not hour_allowed and events:
+                retry_after = max(retry_after, int(events[0] + 3600 - now))
+
+            return RateLimitDecision(
+                allowed=False,
+                retry_after_seconds=retry_after,
+                limit_per_minute=self.per_minute,
+                remaining_minute=max(0, self.per_minute - minute_count),
+                limit_per_hour=self.per_hour,
+                remaining_hour=max(0, self.per_hour - hour_count),
+            )
+
+
+diagnose_ip_limiter = InMemoryHardRateLimiter(
+    per_minute=DIAGNOSE_PER_IP_PER_MINUTE,
+    per_hour=DIAGNOSE_PER_IP_PER_HOUR,
+)
+diagnose_global_limiter = InMemoryHardRateLimiter(
+    per_minute=DIAGNOSE_GLOBAL_PER_MINUTE,
+    per_hour=DIAGNOSE_GLOBAL_PER_HOUR,
+)
+
+
+def get_client_identifier(request: Request) -> str:
+    # Prefer the first forwarded IP when behind a trusted reverse proxy.
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def parse_json_from_llm_text(
+    response_text: str,
+    required_keys: List[str],
+    list_keys: Optional[List[str]] = None,
+    numeric_keys: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    if not response_text:
+        raise ValueError("Empty LLM response.")
+
+    candidates: List[str] = [response_text.strip()]
+
+    fenced_matches = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
+    candidates.extend(fenced_matches)
+
+    # Try to decode first JSON object found in the text.
+    decoder = json.JSONDecoder()
+    for start_idx, ch in enumerate(response_text):
+        if ch != "{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(response_text[start_idx:])
+            if isinstance(obj, dict):
+                candidates.append(json.dumps(obj))
+                break
+        except json.JSONDecodeError:
+            continue
+
+    parsed = None
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                break
+        except Exception:
+            continue
+
+    if not isinstance(parsed, dict):
+        raise ValueError("No valid JSON object found in LLM response.")
+
+    if not all(key in parsed for key in required_keys):
+        raise ValueError(f"Parsed JSON missing required keys: {required_keys}")
+
+    for key in list_keys or []:
+        if not isinstance(parsed.get(key), list):
+            raise ValueError(f"Parsed JSON '{key}' is not a list.")
+
+    for key in numeric_keys or []:
+        if not isinstance(parsed.get(key), (float, int)):
+            raise ValueError(f"Parsed JSON '{key}' is not a number.")
+
+    return parsed
+
 # --- Helper: Robust LLM Call ---
 def generate_gemini_content_with_retry(model_name, prompt, max_retries=3, initial_delay=2):
     logger.info(f"LLM call: model={model_name}, prompt_length={len(prompt)}")
@@ -106,7 +255,11 @@ def generate_gemini_content_with_retry(model_name, prompt, max_retries=3, initia
             start = time.time()
             response = client.models.generate_content(
                 model=model_name,
-                contents=prompt
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2,
+                ),
             )
             duration = time.time() - start
             logger.info(f"LLM response received in {duration:.2f}s (attempt {attempt+1})")
@@ -176,21 +329,13 @@ def diagnostician_node(state: AgentState) -> AgentState:
         return {**state, "error_message": f"Diagnostician LLM Error: {llm_response_text}"}
     diagnosis_json = None
     try:
-        json_match = re.search(r'\{.*\}', llm_response_text, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-            diagnosis_json = json.loads(json_str)
-            required_keys = ["primary_diagnosis", "primary_confidence", "alternative_diagnoses"]
-            if not all(key in diagnosis_json for key in required_keys):
-                raise ValueError(f"Parsed JSON missing required keys: {required_keys}")
-            if not isinstance(diagnosis_json["alternative_diagnoses"], list):
-                raise ValueError("Parsed JSON 'alternative_diagnoses' is not a list.")
-            if not isinstance(diagnosis_json["primary_confidence"], (float, int)):
-                raise ValueError("Parsed JSON 'primary_confidence' is not a number.")
-            logger.info("Diagnostician: Diagnosis JSON parsed successfully.")
-        else:
-            logger.error("Diagnostician failed: Invalid JSON response from LLM.")
-            return {**state, "error_message": "Diagnostician failed: Invalid JSON response from LLM."}
+        diagnosis_json = parse_json_from_llm_text(
+            llm_response_text,
+            required_keys=["primary_diagnosis", "primary_confidence", "alternative_diagnoses"],
+            list_keys=["alternative_diagnoses"],
+            numeric_keys=["primary_confidence"],
+        )
+        logger.info("Diagnostician: Diagnosis JSON parsed successfully.")
     except Exception as e:
         logger.error(f"Diagnostician failed: {e}")
         return {**state, "error_message": f"Diagnostician failed: {e}"}
@@ -240,25 +385,20 @@ Provide ONLY the JSON object in your response.
         return {**state, "triage_result": {"status": "Failed", "reason": llm_response_text}, "error_message": f"Triage Agent LLM Error: {llm_response_text}"}
     triage_json = None
     try:
-        json_match = re.search(r'\{.*\}', llm_response_text, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-            triage_json = json.loads(json_str)
-            if not all(k in triage_json for k in ["triage_level", "next_step", "explanation"]):
-                raise ValueError("Triage JSON missing required keys.")
-            logger.info("Triage Agent: Triage JSON parsed successfully.")
-            triage_json["status"] = "Success"
-            if learn_mode:
-                triage_json["reasoning"] = [
-                    "Classified urgency based on diagnosis and symptom severity.",
-                    "Emergency if life-threatening, urgent if needs quick attention, routine otherwise."
-                ]
-                triage_json["guidelines"] = [
-                    "Triage logic inspired by WHO triage protocols and common clinical practice."
-                ]
-        else:
-            logger.error("Triage Agent failed: Invalid JSON response from LLM.")
-            triage_json = {"status": "Failed", "reason": "Invalid JSON response from LLM."}
+        triage_json = parse_json_from_llm_text(
+            llm_response_text,
+            required_keys=["triage_level", "next_step", "explanation"],
+        )
+        logger.info("Triage Agent: Triage JSON parsed successfully.")
+        triage_json["status"] = "Success"
+        if learn_mode:
+            triage_json["reasoning"] = [
+                "Classified urgency based on diagnosis and symptom severity.",
+                "Emergency if life-threatening, urgent if needs quick attention, routine otherwise."
+            ]
+            triage_json["guidelines"] = [
+                "Triage logic inspired by WHO triage protocols and common clinical practice."
+            ]
     except Exception as e:
         logger.error(f"Triage Agent failed: {e}")
         triage_json = {"status": "Failed", "reason": f"Triage Agent failed: {e}"}
@@ -332,24 +472,19 @@ def validator_node(state: AgentState) -> AgentState:
         return {**state, "error_message": f"Validator LLM Error: {llm_response_text}"}
     validation_json = None
     try:
-        json_match = re.search(r'\{.*\}', llm_response_text, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-            validation_json = json.loads(json_str)
-            if not all(k in validation_json for k in ["validation_status", "critique", "missed_alternatives"]):
-                raise ValueError("Validation JSON missing required keys.")
-            if not isinstance(validation_json["missed_alternatives"], list):
-                raise ValueError("'missed_alternatives' must be a list.")
-            logger.info("Validator: Validation JSON parsed successfully.")
-            if learn_mode:
-                validation_json["reasoning"] = [
-                    "Compared AI diagnosis to established guidelines and checked for contradictions.",
-                    "Flagged for review if inconsistencies or missed alternatives found."
-                ]
-                validation_json["guidelines"] = [
-                    "Validation logic based on NICE/WHO clinical guidelines."]
-        else:
-            validation_json = {"status": "Failed", "reason": "Invalid JSON response from LLM critique.", "critique": "", "missed_alternatives": []}
+        validation_json = parse_json_from_llm_text(
+            llm_response_text,
+            required_keys=["validation_status", "critique", "missed_alternatives"],
+            list_keys=["missed_alternatives"],
+        )
+        logger.info("Validator: Validation JSON parsed successfully.")
+        if learn_mode:
+            validation_json["reasoning"] = [
+                "Compared AI diagnosis to established guidelines and checked for contradictions.",
+                "Flagged for review if inconsistencies or missed alternatives found."
+            ]
+            validation_json["guidelines"] = [
+                "Validation logic based on NICE/WHO clinical guidelines."]
     except Exception as e:
         validation_json = {"status": "Failed", "reason": f"Unexpected error - {e}", "critique": "", "missed_alternatives": []}
     logger.info("[Node] Validator: Exit")
@@ -375,24 +510,19 @@ def educator_node(state: AgentState) -> AgentState:
         return {**state, "error_message": f"Educator LLM Error: {llm_response_text}"}
     education_json = None
     try:
-        json_match = re.search(r'\{.*\}', llm_response_text, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-            education_json = json.loads(json_str)
-            if not all(k in education_json for k in ["explanation", "medication_info", "next_steps", "visual_placeholder_filename"]):
-                raise ValueError("Education JSON missing required keys.")
-            if not isinstance(education_json["next_steps"], list):
-                raise ValueError("'next_steps' must be a list.")
-            logger.info("Educator: Education JSON parsed successfully.")
-            if learn_mode and education_json:
-                education_json["reasoning"] = [
-                    "Generated patient-friendly explanation and next steps based on diagnosis and context.",
-                    "Avoided medical jargon and emphasized consulting a professional."
-                ]
-                education_json["guidelines"] = [
-                    "Patient education based on WHO patient communication best practices."]
-        else:
-            education_json = {"status": "Failed", "reason": "Invalid JSON response from educator LLM."}
+        education_json = parse_json_from_llm_text(
+            llm_response_text,
+            required_keys=["explanation", "medication_info", "next_steps", "visual_placeholder_filename"],
+            list_keys=["next_steps"],
+        )
+        logger.info("Educator: Education JSON parsed successfully.")
+        if learn_mode and education_json:
+            education_json["reasoning"] = [
+                "Generated patient-friendly explanation and next steps based on diagnosis and context.",
+                "Avoided medical jargon and emphasized consulting a professional."
+            ]
+            education_json["guidelines"] = [
+                "Patient education based on WHO patient communication best practices."]
     except Exception as e:
         education_json = {"status": "Failed", "reason": f"Unexpected error - {e}"}
     logger.info("[Node] Educator: Exit")
@@ -416,21 +546,13 @@ def bias_check_node(state: AgentState) -> AgentState:
         return {**state, "error_message": f"Bias Check LLM Error: {llm_response_text}"}
     bias_json = None
     try:
-        json_match = re.search(r'\{.*\}', llm_response_text, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-            bias_json = json.loads(json_str)
-            if not all(k in bias_json for k in ["bias_risk_score", "potential_biases_identified", "suggested_cultural_adaptations"]):
-                raise ValueError("Bias analysis JSON missing required keys.")
-            if not isinstance(bias_json["bias_risk_score"], (float, int)):
-                raise ValueError("'bias_risk_score' must be a number.")
-            if not isinstance(bias_json["potential_biases_identified"], list):
-                raise ValueError("'potential_biases_identified' must be a list.")
-            if not isinstance(bias_json["suggested_cultural_adaptations"], list):
-                raise ValueError("'suggested_cultural_adaptations' must be a list.")
-            logger.info("Bias Checker: Bias analysis JSON parsed successfully.")
-        else:
-            bias_json = {"status": "Failed", "reason": "Invalid JSON response from bias check LLM."}
+        bias_json = parse_json_from_llm_text(
+            llm_response_text,
+            required_keys=["bias_risk_score", "potential_biases_identified", "suggested_cultural_adaptations"],
+            list_keys=["potential_biases_identified", "suggested_cultural_adaptations"],
+            numeric_keys=["bias_risk_score"],
+        )
+        logger.info("Bias Checker: Bias analysis JSON parsed successfully.")
     except Exception as e:
         bias_json = {"status": "Failed", "reason": f"Unexpected error - {e}"}
     logger.info("[Node] Bias Checker: Exit")
@@ -545,7 +667,7 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -559,11 +681,64 @@ class SymptomInput(BaseModel):
     learn_mode: Optional[bool] = False
 
 @app.post("/diagnose")
-async def diagnose(symptom_input: SymptomInput):
+async def diagnose(request: Request, symptom_input: SymptomInput):
     logger.info("/diagnose endpoint called.")
     if not app_graph:
         logger.error("LangGraph workflow not available.")
-        return JSONResponse(content={"status": "error", "error": "LangGraph workflow not available."})
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "error": "Service unavailable. Please try again later."},
+        )
+
+    client_id = get_client_identifier(request)
+    global_limit = diagnose_global_limiter.check("GLOBAL")
+    if not global_limit.allowed:
+        logger.warning("Global diagnose rate limit hit.")
+        return JSONResponse(
+            status_code=429,
+            headers={
+                "Retry-After": str(global_limit.retry_after_seconds),
+                "X-RateLimit-Limit-Minute": str(global_limit.limit_per_minute),
+                "X-RateLimit-Limit-Hour": str(global_limit.limit_per_hour),
+                "X-RateLimit-Remaining-Minute": str(global_limit.remaining_minute),
+                "X-RateLimit-Remaining-Hour": str(global_limit.remaining_hour),
+            },
+            content={
+                "status": "error",
+                "error_code": "RATE_LIMITED_GLOBAL",
+                "message": "System is currently busy. Please retry after a short wait.",
+                "retry_after_seconds": global_limit.retry_after_seconds,
+                "limits": {
+                    "minute": global_limit.limit_per_minute,
+                    "hour": global_limit.limit_per_hour,
+                },
+            },
+        )
+
+    per_ip_limit = diagnose_ip_limiter.check(client_id)
+    if not per_ip_limit.allowed:
+        logger.warning(f"Rate limit hit for client={client_id}")
+        return JSONResponse(
+            status_code=429,
+            headers={
+                "Retry-After": str(per_ip_limit.retry_after_seconds),
+                "X-RateLimit-Limit-Minute": str(per_ip_limit.limit_per_minute),
+                "X-RateLimit-Limit-Hour": str(per_ip_limit.limit_per_hour),
+                "X-RateLimit-Remaining-Minute": str(per_ip_limit.remaining_minute),
+                "X-RateLimit-Remaining-Hour": str(per_ip_limit.remaining_hour),
+            },
+            content={
+                "status": "error",
+                "error_code": "RATE_LIMITED",
+                "message": "Hard request limit reached for diagnosis. Please retry later.",
+                "retry_after_seconds": per_ip_limit.retry_after_seconds,
+                "limits": {
+                    "minute": per_ip_limit.limit_per_minute,
+                    "hour": per_ip_limit.limit_per_hour,
+                },
+            },
+        )
+
     initial_state = AgentState(
         original_input=symptom_input.symptoms,
         input_language="en",
@@ -582,13 +757,29 @@ async def diagnose(symptom_input: SymptomInput):
     )
     try:
         logger.info("Invoking LangGraph workflow...")
-        final_state = app_graph.invoke(initial_state)
+        final_state = await run_in_threadpool(app_graph.invoke, initial_state)
         report = final_state.get("final_diagnosis_report", {})
         logger.info("Diagnosis workflow completed successfully.")
-        return JSONResponse(content={"status": "success", "report": report})
+        return JSONResponse(
+            content={"status": "success", "report": report},
+            headers={
+                "X-RateLimit-Limit-Minute": str(per_ip_limit.limit_per_minute),
+                "X-RateLimit-Limit-Hour": str(per_ip_limit.limit_per_hour),
+                "X-RateLimit-Remaining-Minute": str(per_ip_limit.remaining_minute),
+                "X-RateLimit-Remaining-Hour": str(per_ip_limit.remaining_hour),
+            },
+        )
     except Exception as e:
+        error_id = str(uuid4())
         logger.error(f"Diagnosis workflow failed: {e}", exc_info=True)
-        return JSONResponse(content={"status": "error", "error": str(e)})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": "Diagnosis workflow failed. Please retry.",
+                "error_id": error_id,
+            },
+        )
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):

@@ -27,6 +27,42 @@ SwasthyaSetu is a modular, agentic AI medical triage and routing assistant. It i
 
 ---
 
+## Production Hardening (Latest)
+
+### 1) Hard Rate Limiting
+- `/diagnose` is now protected with strict hard limits:
+1. Per-IP rolling limits: per-minute and per-hour
+2. Global rolling limits: per-minute and per-hour
+- Default guardrail values (env-overridable):
+1. `DIAGNOSE_PER_IP_PER_MINUTE=4`
+2. `DIAGNOSE_PER_IP_PER_HOUR=30`
+3. `DIAGNOSE_GLOBAL_PER_MINUTE=20`
+4. `DIAGNOSE_GLOBAL_PER_HOUR=240`
+- On breach, API returns `429` plus:
+1. `Retry-After`
+2. `X-RateLimit-Limit-*` and `X-RateLimit-Remaining-*`
+3. JSON payload with `error_code`, `retry_after_seconds`, and `limits`
+
+### 2) Frontend Rate-Limit UX
+- UI now handles `429` explicitly and displays a dedicated rate-limit notice.
+- Message includes wait duration and the active hard-limit values.
+
+### 3) XSS and Output Safety
+- Dynamic report content is sanitized before DOM insertion.
+- External links are URL-sanitized to `http/https` and include `rel="noopener noreferrer"`.
+
+### 4) API Reliability + Error Hygiene
+- LangGraph execution is offloaded with `run_in_threadpool` inside the async route to prevent event-loop blocking.
+- API no longer exposes raw backend exceptions to clients; returns generic failure plus `error_id`.
+
+### 5) CORS and Runtime Dependencies
+- CORS remains wildcard-origin but with `allow_credentials=False`.
+- Added missing runtime dependencies required by routing:
+1. `requests`
+2. `beautifulsoup4`
+
+---
+
 ## Extending SwasthyaSetu
 
 ### Adding New Agents

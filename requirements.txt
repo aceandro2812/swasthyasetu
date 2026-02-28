@@ -2,6 +2,8 @@ fastapi
 uvicorn
 jinja2
 python-dotenv
+requests
+beautifulsoup4
 # For AI workflow dependencies (to be filled in as you migrate logic):
 langgraph
 llama-index
