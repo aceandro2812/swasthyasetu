@@ -19,8 +19,7 @@ from threading import Lock
 from uuid import uuid4
 from dotenv import load_dotenv
 # Import AI workflow dependencies
-from google import genai
-from google.genai import types as genai_types
+from llm_router import LLMRouter
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, ServiceContext, StorageContext
 from llama_index.vector_stores.faiss import FaissVectorStore
 # Import moved to try-catch block to handle missing google.generativeai dependency
@@ -43,32 +42,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger("swasthyasetu")
 
-# --- Initialize Google Gen AI Client ---
-client = None
-if GOOGLE_API_KEY:
-    try:
-        # Strip whitespace to guard against .env formatting issues
-        _clean_key = GOOGLE_API_KEY.strip()
-        client = genai.Client(api_key=_clean_key)
-        logger.info("Google Gen AI Client initialized successfully.")
-    except Exception as e:
-        logger.error(f"Failed to initialize Google Gen AI Client: {e}")
-        client = None
+# --- Initialize Multi-Provider LLM Router ---
+# The router automatically pools Gemini + OpenRouter free models and
+# fails over between providers when one hits its rate limit.
+llm_router = LLMRouter()
+if llm_router.is_available():
+    logger.info(f"LLM Router initialized with {len(llm_router._providers)} provider(s).")
 else:
-    logger.error("GOOGLE_API_KEY is not set. LLM will not be available.")
+    logger.error("LLM Router has NO providers. Set GOOGLE_API_KEY and/or OPENROUTER_API_KEY in .env")
 
 # --- Constants ---
-LLM_MODEL_NAME = "gemini-2.5-flash"
 EMBEDDING_MODEL_NAME = "models/text-embedding-004"
 PDF_DIR = "./pubmed_data/"
 PDF_FILENAME = "pubmed_papers.pdf"
 PDF_FILEPATH = os.path.join(PDF_DIR, PDF_FILENAME)
 
-# Hard limits intentionally lower than Gemini service limits to reduce upstream 429 risk.
-DIAGNOSE_PER_IP_PER_MINUTE = int(os.getenv("DIAGNOSE_PER_IP_PER_MINUTE", "4"))
-DIAGNOSE_PER_IP_PER_HOUR = int(os.getenv("DIAGNOSE_PER_IP_PER_HOUR", "30"))
-DIAGNOSE_GLOBAL_PER_MINUTE = int(os.getenv("DIAGNOSE_GLOBAL_PER_MINUTE", "20"))
-DIAGNOSE_GLOBAL_PER_HOUR = int(os.getenv("DIAGNOSE_GLOBAL_PER_HOUR", "240"))
+# Hard limits — with multiple providers the effective quota is multiplied,
+# so we can raise these slightly vs. Gemini-only.
+DIAGNOSE_PER_IP_PER_MINUTE = int(os.getenv("DIAGNOSE_PER_IP_PER_MINUTE", "6"))
+DIAGNOSE_PER_IP_PER_HOUR = int(os.getenv("DIAGNOSE_PER_IP_PER_HOUR", "60"))
+DIAGNOSE_GLOBAL_PER_MINUTE = int(os.getenv("DIAGNOSE_GLOBAL_PER_MINUTE", "30"))
+DIAGNOSE_GLOBAL_PER_HOUR = int(os.getenv("DIAGNOSE_GLOBAL_PER_HOUR", "360"))
 
 # --- Setup RAG (FAISS + LlamaIndex) ---
 embed_model = None
@@ -242,38 +236,15 @@ def parse_json_from_llm_text(
 
     return parsed
 
-# --- Helper: Robust LLM Call ---
-def generate_gemini_content_with_retry(model_name, prompt, max_retries=3, initial_delay=2):
-    logger.info(f"LLM call: model={model_name}, prompt_length={len(prompt)}")
-    if not client:
-        logger.error("Google Gen AI Client not initialized.")
-        return "Error: Google Gen AI Client not initialized."
+# --- Helper: Unified LLM Call (delegates to multi-provider router) ---
+def generate_llm_content(prompt: str) -> str:
+    """Route a prompt through the multi-provider LLM router.
     
-    delay = initial_delay
-    for attempt in range(max_retries):
-        try:
-            start = time.time()
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.2,
-                ),
-            )
-            duration = time.time() - start
-            logger.info(f"LLM response received in {duration:.2f}s (attempt {attempt+1})")
-            
-            if response.text:
-                return response.text
-            else:
-                return "Error: Empty response from Gemini."
-        except Exception as e:
-            logger.warning(f"LLM call failed (attempt {attempt+1}): {e}")
-            time.sleep(delay)
-            delay *= 2
-    logger.error("Failed to get response from Gemini API after multiple retries.")
-    return "Error: Failed to get response from Gemini API after multiple retries."
+    The router cycles across Gemini and OpenRouter free models,
+    automatically failing over on 429 rate-limit errors.
+    """
+    logger.info(f"LLM call via router: prompt_length={len(prompt)}")
+    return llm_router.generate_content(prompt)
 
 # --- LangGraph Agents & Workflow ---
 class AgentState(TypedDict):
@@ -319,11 +290,11 @@ def diagnostician_node(state: AgentState) -> AgentState:
         logger.warning("Diagnostician: RAG context not available.")
         rag_context_str = "\n\nRelevant Medical Context: [Not Available]"
         state["rag_context"] = ["[Not Available]"]
-    if not client:
-        logger.error("Diagnostician failed: LLM client not initialized.")
-        return {**state, "error_message": "Diagnostician failed: LLM client not initialized."}
+    if not llm_router.is_available():
+        logger.error("Diagnostician failed: LLM router has no providers.")
+        return {**state, "error_message": "Diagnostician failed: No LLM providers configured."}
     prompt = f"""Act as a medical diagnosis assistant. Based ONLY on the provided symptoms and relevant medical context (if available), generate a differential diagnosis.\n\nPatient Symptoms:\n{symptoms}{rag_context_str}\n\nInstructions:\n1. Analyze the symptoms and context.\n2. Generate a list of possible diagnoses (differentials).\n3. For each diagnosis, provide a confidence score (0.0 to 1.0) indicating your certainty based *only* on the provided information. Higher scores mean higher likelihood.\n4. Identify the most likely primary diagnosis.\n5. Structure your output as a JSON object with the following EXACT keys: \"primary_diagnosis\", \"primary_confidence\", \"alternative_diagnoses\" (which should be a list of strings).\n\nProvide ONLY the JSON object in your response."""
-    llm_response_text = generate_gemini_content_with_retry(LLM_MODEL_NAME, prompt)
+    llm_response_text = generate_llm_content(prompt)
     if llm_response_text and llm_response_text.startswith("Error:"):
         logger.error(f"Diagnostician LLM Error: {llm_response_text}")
         return {**state, "error_message": f"Diagnostician LLM Error: {llm_response_text}"}
@@ -355,9 +326,9 @@ def triage_agent_node(state: AgentState) -> AgentState:
     if not diagnosis or not symptoms:
         logger.warning("Triage Agent skipped: Missing diagnosis or symptoms.")
         return {**state, "triage_result": {"status": "Skipped", "reason": "Missing diagnosis or symptoms."}}
-    if not client:
-        logger.error("Triage Agent failed: LLM client not initialized.")
-        return {**state, "triage_result": {"status": "Failed", "reason": "LLM client not initialized."}, "error_message": "Triage Agent failed: LLM client not initialized."}
+    if not llm_router.is_available():
+        logger.error("Triage Agent failed: LLM router has no providers.")
+        return {**state, "triage_result": {"status": "Failed", "reason": "No LLM providers configured."}, "error_message": "Triage Agent failed: No LLM providers configured."}
     primary_diag = diagnosis.get("primary_diagnosis", "N/A")
     confidence = diagnosis.get("primary_confidence", 0.0)
     prompt = f"""
@@ -379,7 +350,7 @@ Instructions:
 4. Output a JSON object with keys: 'triage_level', 'next_step', 'explanation'.
 Provide ONLY the JSON object in your response.
 """
-    llm_response_text = generate_gemini_content_with_retry(LLM_MODEL_NAME, prompt)
+    llm_response_text = generate_llm_content(prompt)
     if llm_response_text and llm_response_text.startswith("Error:"):
         logger.error(f"Triage Agent LLM Error: {llm_response_text}")
         return {**state, "triage_result": {"status": "Failed", "reason": llm_response_text}, "error_message": f"Triage Agent LLM Error: {llm_response_text}"}
@@ -458,15 +429,15 @@ def validator_node(state: AgentState) -> AgentState:
     if not initial_diagnosis or not symptoms:
         logger.warning("Validator skipped: Missing diagnosis or symptoms.")
         return {**state, "validation_results": {"status": "Skipped", "reason": "Missing diagnosis or symptoms."}}
-    if not client:
-        logger.error("Validator failed: LLM client not initialized.")
-        return {**state, "error_message": "Validator failed: LLM client not initialized."}
+    if not llm_router.is_available():
+        logger.error("Validator failed: LLM router has no providers.")
+        return {**state, "error_message": "Validator failed: No LLM providers configured."}
     primary_diag = initial_diagnosis.get("primary_diagnosis", "N/A")
     confidence = initial_diagnosis.get("primary_confidence", "N/A")
     alternatives = initial_diagnosis.get("alternative_diagnoses", [])
     rag_context_str = "\n---\n".join(rag_context) if rag_context else "[Not Available]"
     prompt = f"""Act as a clinical reviewer simulating a check against established medical guidelines (like NICE, but using general medical knowledge).\nYou are given an initial diagnosis generated by another AI based on patient symptoms and some retrieved medical context.\n\nPatient Symptoms:\n{symptoms}\n\nRetrieved Medical Context (from PubMed abstracts):\n{rag_context_str}\n\nInitial AI Diagnosis:\nPrimary: {primary_diag} (Confidence: {confidence})\nAlternatives: {', '.join(alternatives) if alternatives else 'None'}\n\nYour Task:\nCritically evaluate the initial diagnosis based *only* on the provided symptoms and context.\n1. Does the primary diagnosis seem reasonable given the symptoms and context?\n2. Are there any obvious contradictions or inconsistencies?\n3. Are there other highly probable diagnoses based on the provided info that were missed in the alternatives?\n4. Based on your critique, would you tentatively 'Confirm', 'Flag for Review', or 'Suggest Revision' for the primary diagnosis?\n\nProvide your output as a JSON object with the following keys:\n- \"validation_status\": (string, one of \"Confirmed\", \"Flagged for Review\", \"Revision Suggested\")\n- \"critique\": (string, your reasoning and evaluation based on the questions above)\n- \"missed_alternatives\": (list of strings, other possible diagnoses you identified, if any)\n\nProvide ONLY the JSON object in your response."""
-    llm_response_text = generate_gemini_content_with_retry(LLM_MODEL_NAME, prompt)
+    llm_response_text = generate_llm_content(prompt)
     if llm_response_text and llm_response_text.startswith("Error:"):
         logger.error(f"Validator LLM Error: {llm_response_text}")
         return {**state, "error_message": f"Validator LLM Error: {llm_response_text}"}
@@ -498,13 +469,13 @@ def educator_node(state: AgentState) -> AgentState:
     if not diagnosis_info or not diagnosis_info.get("primary_diagnosis"):
         logger.warning("Educator skipped: Missing diagnosis.")
         return {**state, "patient_education": {"status": "Skipped", "reason": "Missing diagnosis."}}
-    if not client:
-        logger.error("Educator failed: LLM client not initialized.")
-        return {**state, "error_message": "Educator failed: LLM client not initialized."}
+    if not llm_router.is_available():
+        logger.error("Educator failed: LLM router has no providers.")
+        return {**state, "error_message": "Educator failed: No LLM providers configured."}
     primary_diag = diagnosis_info.get("primary_diagnosis")
     rag_context_str = "\n---\n".join(rag_context) if rag_context else "[Not Available]"
     prompt = f"""Act as a patient educator AI. You are given a medical diagnosis and relevant context.\n\nDiagnosis: {primary_diag}\n\nRelevant Medical Context (from PubMed abstracts):\n{rag_context_str}\n\nYour Task: Generate patient education material based *only* on the provided diagnosis and context.\n1.  **Explanation:** Provide a simple, patient-friendly explanation of what '{primary_diag}' is (approx. 2-3 sentences). Avoid jargon.\n2.  **Medication Info:** Scan the 'Relevant Medical Context'. If specific medications for treating '{primary_diag}' are mentioned, list them. If not, state \"Consult your physician for medication options.\" Do NOT invent medications.\n3.  **Next Steps/Lifestyle:** Suggest 2-3 general, safe next steps or lifestyle considerations relevant to this type of condition (e.g., follow-up appointments, rest, hydration, seeking professional advice for specifics). Emphasize consulting a healthcare professional.\n4.  **Visual Placeholder:** Generate a descriptive filename for a hypothetical explanatory visual (e.g., 'Animation_showing_{primary_diag.replace(' ','_')}.mp4').\n\nProvide your output as a JSON object with the following keys:\n- \"explanation\": (string) Patient-friendly explanation.\n- \"medication_info\": (string) Mentioned medications or consultation advice.\n- \"next_steps\": (list of strings) General advice points.\n- \"visual_placeholder_filename\": (string) Generated filename for the visual.\n\nProvide ONLY the JSON object in your response."""
-    llm_response_text = generate_gemini_content_with_retry(LLM_MODEL_NAME, prompt)
+    llm_response_text = generate_llm_content(prompt)
     if llm_response_text and llm_response_text.startswith("Error:"):
         logger.error(f"Educator LLM Error: {llm_response_text}")
         return {**state, "error_message": f"Educator LLM Error: {llm_response_text}"}
@@ -535,12 +506,12 @@ def bias_check_node(state: AgentState) -> AgentState:
     if not initial_diagnosis or not symptoms:
         logger.warning("Bias Check skipped: Missing diagnosis or symptoms.")
         return {**state, "bias_analysis": {"status": "Skipped", "reason": "Missing diagnosis or symptoms."}}
-    if not client:
-        logger.error("Bias Check failed: LLM client not initialized.")
-        return {**state, "error_message": "Bias Check failed: LLM client not initialized."}
+    if not llm_router.is_available():
+        logger.error("Bias Check failed: LLM router has no providers.")
+        return {**state, "error_message": "Bias Check failed: No LLM providers configured."}
     diagnosis_summary = f"Primary: {initial_diagnosis.get('primary_diagnosis', 'N/A')}, Confidence: {initial_diagnosis.get('primary_confidence', 'N/A')}, Alternatives: {initial_diagnosis.get('alternative_diagnoses', [])}"
     prompt = f"""Analyze the following diagnosis information for potential biases. Focus specifically on:\n1.  **Gender/racial stereotypes:** Does the diagnosis or the way it might have been reached rely on assumptions about specific genders or races?\n2.  **Socioeconomic assumptions:** Does the potential diagnosis path or suggested alternatives implicitly assume a certain socioeconomic status (e.g., access to specific tests, lifestyle factors)?\n3.  **Cultural competency:** Could the symptoms presentation or interpretation be influenced by cultural factors not accounted for? Are there potential cultural adaptations needed for communication or treatment?\n\nPatient Symptoms:\n{symptoms}\n\nAI-Generated Diagnosis Summary:\n{diagnosis_summary}\n\nInstructions:\n- Critically evaluate based on the three points above.\n- Provide a qualitative assessment. Note specific concerns if any.\n- Suggest potential cultural adaptations if relevant (e.g., language considerations, culturally sensitive explanations).\n- Assign a hypothetical bias risk score from 0.0 (very low risk) to 1.0 (high risk detected). This is subjective based on your analysis.\n- Structure your output as a JSON object with keys: \"bias_risk_score\" (float), \"potential_biases_identified\" (list of strings describing concerns), \"suggested_cultural_adaptations\" (list of strings).\n\nProvide ONLY the JSON object in your response."""
-    llm_response_text = generate_gemini_content_with_retry(LLM_MODEL_NAME, prompt)
+    llm_response_text = generate_llm_content(prompt)
     if llm_response_text and llm_response_text.startswith("Error:"):
         logger.error(f"Bias Check LLM Error: {llm_response_text}")
         return {**state, "error_message": f"Bias Check LLM Error: {llm_response_text}"}
@@ -789,7 +760,17 @@ async def root(request: Request):
 @app.get("/health")
 async def health():
     logger.info("Health check endpoint accessed.")
-    return {"status": "ok"}
+    provider_status = llm_router.status()
+    any_available = any(p["available"] for p in provider_status)
+    return {
+        "status": "ok",
+        "llm_router": {
+            "providers_total": len(provider_status),
+            "providers_available": sum(1 for p in provider_status if p["available"]),
+            "any_available": any_available,
+            "providers": provider_status,
+        },
+    }
 
 if __name__ == "__main__":
     logger.info("Starting FastAPI server...")

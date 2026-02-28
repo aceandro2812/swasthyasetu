@@ -4,7 +4,7 @@ jinja2
 python-dotenv
 requests
 beautifulsoup4
-# For AI workflow dependencies (to be filled in as you migrate logic):
+# For AI workflow dependencies:
 langgraph
 llama-index
 faiss-cpu
@@ -14,3 +14,5 @@ llama-index-embeddings-gemini
 llama-index-readers-file
 sentence-transformers
 torch
+# OpenAI SDK used as the client for OpenRouter's OpenAI-compatible API (free models)
+openai

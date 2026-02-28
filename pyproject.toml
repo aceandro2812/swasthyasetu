@@ -15,6 +15,7 @@ dependencies = [
     "llama-index-embeddings-gemini>=0.4.2",
     "llama-index-readers-file>=0.5.6",
     "llama-index-vector-stores-faiss>=0.5.3",
+    "openai>=2.24.0",
     "python-dotenv>=1.2.1",
     "requests>=2.32.5",
     "sentence-transformers>=5.2.3",
